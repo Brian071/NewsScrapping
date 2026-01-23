@@ -51,7 +51,7 @@ async def scrape_batch(start_date, end_date, entity, keywords=""):
     delta = (end_dt - start_dt).days + 1
 
     # Load existing to skip
-    df_local = gsheet_handler.read_sheet_to_df(worksheet_name_or_index=0)
+    df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
 
     tasks = []
 
