@@ -1,39 +1,34 @@
 import streamlit as st
 import pandas as pd
-import requests
 from datetime import datetime, timedelta
 import time
+import asyncio
+import nest_asyncio
+
+# Local Modules
+import gsheet_handler
+import scraper_service
+import translator_utils
+
+# Enable nested asyncio for Streamlit
+nest_asyncio.apply()
 
 st.set_page_config(page_title="Auto AI News System", page_icon="🤖", layout="wide")
 
-# --- Sidebar Config ---
+# --- Helper Wrapper ---
+def run_async(coroutine):
+    """Helper to run async code in Streamlit"""
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coroutine)
+
+# --- Config ---
+# No more API URL config needed
+
 st.sidebar.title("🤖 Auto AI System")
-st.sidebar.header("⚙️ Configuration")
-api_url = st.sidebar.text_input("Backend API URL", value="http://localhost:8000")
-
-# --- Helper ---
-def get_data(api_url):
-    try:
-        r = requests.get(f"{api_url}/data")
-        if r.status_code == 200:
-            data = r.json()
-            if not data:
-                return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"])
-            return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Failed to fetch data from {api_url}: {e}")
-        st.warning(f"Ensure the backend is running at {api_url}")
-    return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"])
-
-def get_logs(api_url):
-    try:
-        r = requests.get(f"{api_url}/logs")
-        if r.status_code == 200:
-            return pd.DataFrame(r.json())
-    except:
-        pass
-    return pd.DataFrame()
-
 app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
 
 # ==========================================
@@ -56,15 +51,19 @@ if app_mode == "📝 Input & Scraping":
                 t = st.text_input("Judul")
                 c = st.text_area("Isi", height=200)
                 if st.form_submit_button("Simpan"):
-                    payload = {"Tanggal": str(date_input), "Entitas": entity_input, "Judul": t, "Isi": c}
+                    row_data = {
+                        "Tanggal": str(date_input),
+                        "Entitas": entity_input,
+                        "Judul": t,
+                        "Isi": c,
+                        "Judul_Inggris": "",
+                        "Isi_Inggris": ""
+                    }
                     try:
-                        r = requests.post(f"{api_url}/save", json=payload)
-                        if r.status_code == 200:
-                            st.success("Tersimpan!")
-                        else:
-                            st.error(r.text)
+                        gsheet_handler.append_to_sheet(row_data)
+                        st.success("Tersimpan!")
                     except Exception as e:
-                        st.error(f"Backend Error at {api_url}: {e}")
+                        st.error(f"Error saving: {e}")
 
     # --- 2. BATCH SCRAPE ---
     elif sub_page == "Batch Scrape (Auto)":
@@ -76,21 +75,21 @@ if app_mode == "📝 Input & Scraping":
         kw = st.text_input("Keywords")
         
         if st.button("Start Batch Scrape"):
-            payload = {
-                "start_date": str(start), "end_date": str(end),
-                "entity": entity, "keywords": kw
-            }
-            with st.spinner("Processing in background..."):
+            with st.spinner("Processing in background (Parallel)..."):
                 try:
-                    r = requests.post(f"{api_url}/scrape", json=payload)
-                    if r.status_code == 200:
-                        data = r.json()
-                        st.session_state.batch_results = pd.DataFrame(data)
-                        st.success(f"Found {len(data)} articles!")
-                    else:
-                        st.error(f"Error: {r.text}")
+                    # Run the async scraper directly
+                    data = run_async(scraper_service.scrape_batch(
+                        start_date=str(start),
+                        end_date=str(end),
+                        entity=entity,
+                        keywords=kw
+                    ))
+
+                    st.session_state.batch_results = pd.DataFrame(data)
+                    st.success(f"Found {len(data)} articles!")
+
                 except Exception as e:
-                    st.error(f"Connection Error at {api_url}: {e}")
+                    st.error(f"Scraping Error: {e}")
                     
         if 'batch_results' in st.session_state and not st.session_state.batch_results.empty:
             edited = st.data_editor(st.session_state.batch_results)
@@ -98,21 +97,27 @@ if app_mode == "📝 Input & Scraping":
                 count = 0
                 for _, row in edited.iterrows():
                     if row.get("Pilih", True):
-                        payload = row.to_dict()
+                        clean_data = {
+                            "Tanggal": row.get("Tanggal"),
+                            "Entitas": row.get("Entitas"),
+                            "Judul": row.get("Judul"),
+                            "Isi": row.get("Isi"),
+                            "URL": row.get("URL", ""),
+                            "Judul_Inggris": "",
+                            "Isi_Inggris": ""
+                        }
                         try:
-                            requests.post(f"{api_url}/save", json=payload)
+                            gsheet_handler.append_to_sheet(clean_data)
                             count += 1
                         except Exception as e:
-                             st.error(f"Save failed: {e}")
+                             st.error(f"Save failed for {row.get('Judul')}: {e}")
                 st.success(f"Saved {count} items.")
 
     # --- 3. GAP FILLER ---
     elif sub_page == "Gap Filler (Manual Scrape)":
         st.subheader("🕵️ Manual Scrape / Gap Filler")
-        # Reuse logic simply
         if st.button("Scan Missing Dates"):
-            st.info("Scanning feature active via API logic...")
-            # (Simplified for brevity, assumes implementation matches previous appA logic but calls API)
+            st.info("Logic pending implementation directly in frontend.")
 
     # --- 4. MONITOR ---
     elif sub_page == "Monitor Data":
@@ -120,13 +125,14 @@ if app_mode == "📝 Input & Scraping":
         if st.button("Refresh"):
             st.rerun()
         
-        df = get_data(api_url)
-        
-        if df.empty:
-            st.warning("Data kosong atau gagal memuat dari Google Sheet.")
-            st.write("Pastikan file Google Sheet 'data_berita' ada dan memiliki header.")
-        else:
-            st.dataframe(df)
+        try:
+            df = gsheet_handler.read_sheet_to_df()
+            if df.empty:
+                st.warning("Data kosong atau gagal memuat.")
+            else:
+                st.dataframe(df)
+        except Exception as e:
+            st.error(f"Failed to load data: {e}")
 
 # ==========================================
 # APP B: TRANSLATOR
@@ -137,11 +143,10 @@ elif app_mode == "🔄 Translator":
     tab1, tab2 = st.tabs(["Pending", "History"])
     
     # Refresh data
-    df = get_data(api_url)
+    df = gsheet_handler.read_sheet_to_df()
     
     with tab1:
         if not df.empty:
-            # Safe access to columns even if empty
             if 'Judul_Inggris' in df.columns:
                 mask = (df['Judul_Inggris'] == "") | (df['Isi_Inggris'] == "")
                 pending = df[mask]
@@ -150,18 +155,24 @@ elif app_mode == "🔄 Translator":
                 edited_pend = st.data_editor(pending, key="pend_edit")
                 
                 if st.button("Translate Selected"):
-                    # Simplification: Send all displayed/filtered rows
-                    # In real usage, we iterate edited_pend
-                    payload = {"rows": pending.to_dict(orient="records")}
+                    # Use translator_utils directly
+                    # We need to filter based on selection, but st.data_editor logic for selection
+                    # depends on if the user edited the dataframe or we use a checkbox column.
+                    # For simplicity, we process the whole filtered Pending list or rely on appB logic.
+                    # Here we will just process all rows visible in 'pending' for simplicity as per original appB logic
+                    # or better, use the edited_pend if users unchecked things (if configured).
+
+                    # Converting DataFrame to list of dicts isn't needed for translator_utils.process_rows
+                    # It accepts a DataFrame.
+
                     with st.spinner("Translating..."):
                         try:
-                            r = requests.post(f"{api_url}/translate", json=payload)
-                            if r.status_code == 200:
-                                st.success("Translated & Updated!")
-                                time.sleep(1)
-                                st.rerun()
+                            processed_df, msg = translator_utils.process_rows(pending, progress=None)
+                            st.success(f"Success! {msg}")
+                            time.sleep(1)
+                            st.rerun()
                         except Exception as e:
-                            st.error(f"API Error at {api_url}: {e}")
+                            st.error(f"Translation Error: {e}")
             else:
                 st.warning("Kolom Judul_Inggris tidak ditemukan.")
         else:
