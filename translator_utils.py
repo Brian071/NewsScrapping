@@ -17,9 +17,8 @@ def load_resources():
     if _translator is None:
         print("Loading NLLB-200 model...")
         device = 0 if torch.cuda.is_available() else -1
-        # NLLB requires source/target langs. 
-        # ind_Latn = Indonesian, eng_Latn = English
-        _translator = pipeline("translation", model="facebook/nllb-200-1.3B", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
+        # Use lighter model for Colab stability: facebook/nllb-200-distilled-600M
+        _translator = pipeline("translation", model="facebook/nllb-200-distilled-600M", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
     
     if _splitter is None:
         print("Loading LlamaIndex SentenceSplitter...")

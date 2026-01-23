@@ -70,7 +70,8 @@ if app_mode == "📝 Input & Scraping":
                         "Judul": t,
                         "Isi": c,
                         "Judul_Inggris": "",
-                        "Isi_Inggris": ""
+                        "Isi_Inggris": "",
+                        "URL": ""
                     }
                     try:
                         gsheet_handler.append_to_sheet(row_data)
@@ -162,21 +163,32 @@ elif app_mode == "🔄 Translator":
         if not df.empty:
             if 'Judul_Inggris' in df.columns:
                 mask = (df['Judul_Inggris'] == "") | (df['Isi_Inggris'] == "")
-                pending = df[mask]
+                pending = df[mask].copy() # Make a copy to avoid slice warnings
+
+                # Add "Pilih" column for selection
+                if "Pilih" not in pending.columns:
+                    pending.insert(0, "Pilih", True)
+
                 st.info(f"Pending: {len(pending)}")
                 
+                # Use key to capture state of edits (checkboxes)
                 edited_pend = st.data_editor(pending, key="pend_edit")
                 
                 if st.button("Translate Selected"):
-                    # Use translator_utils directly
-                    with st.spinner("Translating..."):
-                        try:
-                            processed_df, msg = translator_utils.process_rows(pending, progress=None)
-                            st.success(f"Success! {msg}")
-                            time.sleep(1)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Translation Error: {e}")
+                    # Filter based on "Pilih" checkbox
+                    to_translate = edited_pend[edited_pend["Pilih"] == True]
+
+                    if to_translate.empty:
+                        st.warning("No rows selected for translation.")
+                    else:
+                        with st.spinner("Translating..."):
+                            try:
+                                processed_df, msg = translator_utils.process_rows(to_translate, progress=None)
+                                st.success(f"Success! {msg}")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Translation Error: {e}")
             else:
                 st.warning("Kolom Judul_Inggris tidak ditemukan.")
         else:

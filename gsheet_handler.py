@@ -41,7 +41,8 @@ def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita")
                 ws.append_row(["Tanggal", "Entitas", "Alasan", "Timestamp"])
             else:
                 # Default for data_berita
-                ws.append_row(["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"])
+                # Added URL for verification and duplicate checking
+                ws.append_row(["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
             return ws
             
     except Exception as e:
@@ -61,7 +62,7 @@ def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berit
         
         # Ensure standard columns exist for MAIN sheet only
         if target_name == "data_berita":
-            required_columns = ["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"]
+            required_columns = ["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"]
             
             # If empty or missing columns
             if df.empty:
