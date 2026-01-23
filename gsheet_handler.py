@@ -1,10 +1,11 @@
+import os
 import gspread
 import pandas as pd
 from google.auth import default
 import time
 
 # Default Spreadsheet ID provided by user
-DEFAULT_SPREADSHEET_ID = "1U8xeumDGJckZsTqIMyNr0DBfg0Bv9_IRpDV6XdN59Hw"
+DEFAULT_SPREADSHEET_ID = os.getenv("GSHEET")
 
 def get_creds():
     try:
