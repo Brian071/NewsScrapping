@@ -3,11 +3,7 @@ from datetime import datetime, timedelta
 from ddgs import DDGS
 from newspaper import Article
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
-import nest_asyncio
 import gsheet_handler
-
-# Enable nest_asyncio to allow nested event loops (crucial for Streamlit + Crawl4AI)
-nest_asyncio.apply()
 
 async def extract_article_content_async(url):
     if not url: return None, None, None

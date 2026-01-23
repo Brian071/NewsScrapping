@@ -11,7 +11,11 @@ import scraper_service
 import translator_utils
 
 # Enable nested asyncio for Streamlit
-nest_asyncio.apply()
+try:
+    nest_asyncio.apply()
+except Exception as e:
+    # Log warning if patching fails, but continue to avoid crashing on import
+    print(f"WARNING: Failed to patch asyncio loop with nest_asyncio: {e}")
 
 st.set_page_config(page_title="Auto AI News System", page_icon="🤖", layout="wide")
 
@@ -23,6 +27,13 @@ def run_async(coroutine):
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+    # Try patching the specific loop if global patch failed or didn't catch this one
+    try:
+        nest_asyncio.apply(loop)
+    except Exception:
+        pass
+
     return loop.run_until_complete(coroutine)
 
 # --- Config ---
@@ -156,15 +167,6 @@ elif app_mode == "🔄 Translator":
                 
                 if st.button("Translate Selected"):
                     # Use translator_utils directly
-                    # We need to filter based on selection, but st.data_editor logic for selection
-                    # depends on if the user edited the dataframe or we use a checkbox column.
-                    # For simplicity, we process the whole filtered Pending list or rely on appB logic.
-                    # Here we will just process all rows visible in 'pending' for simplicity as per original appB logic
-                    # or better, use the edited_pend if users unchecked things (if configured).
-
-                    # Converting DataFrame to list of dicts isn't needed for translator_utils.process_rows
-                    # It accepts a DataFrame.
-
                     with st.spinner("Translating..."):
                         try:
                             processed_df, msg = translator_utils.process_rows(pending, progress=None)
