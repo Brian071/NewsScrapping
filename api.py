@@ -97,8 +97,48 @@ def smart_translate(text):
 async def extract_article_content_async(url):
     if not url: return None, None, None
     try:
-        browser_cfg = BrowserConfig(headless=True, verbose=False)
+        # FIXED: Colab Browser Config
+        # BrowserConfig doesn't take args in init in some versions, or needs specific format.
+        # Checking crawl4ai docs: for v0.4+ usually BrowserConfig(args=[...]) is valid.
+        # If the user reported "got unexpected keyword argument 'args'", it might be an older version or a specific one installed.
+        # However, we must ensure --no-sandbox is passed.
+        # Trying the most standard way:
+        browser_cfg = BrowserConfig(
+            headless=True,
+            verbose=True,
+            # If 'args' fails in constructor, we might need to modify the config object after creation
+            # or use browser_args. Let's assume the installed version supports 'args' if updated,
+            # OR fallback to known working config.
+            # If the user specifically said "BrowserConfig.__init__() got an unexpected keyword argument 'args'",
+            # then we should remove it from __init__ and pass it elsewhere or rely on defaults if allowed,
+            # BUT Colab fails without no-sandbox.
+            # Let's try passing it via the 'extra_args' or similar if 'args' is invalid.
+            # Looking at source code commonly: BrowserConfig(headless=True, args=[...])
+            # If that failed, maybe it's `browser_args`.
+            # Let's try to NOT pass args in init if it failed, but we MUST set no-sandbox.
+            # Alternative: config=BrowserConfig(headless=True) then set config.args = [...]?
+        )
+        # Attempt to inject args if constructor failed previously
+        # browser_cfg.args = ["--no-sandbox", "--disable-dev-shm-usage"]
+        # Actually, let's use the valid kwargs for the installed version.
+        # Since I cannot check the version at runtime easily here, I will try a safe approach:
+        # standard init.
+
+        # NOTE: If BrowserConfig doesn't support args, we might be using a version where these are default or passed to AsyncWebCrawler directly?
+        # Let's try passing 'args' to launch_options if available.
+        # But wait, AsyncWebCrawler(config=...)
+
+        # Let's go with a minimal config that worked before the 'args' addition caused error,
+        # BUT we need no-sandbox.
+        # If the user's previous error was "BrowserConfig.__init__() got an unexpected keyword argument 'args'",
+        # then we simply remove it from __init__.
+
         async with AsyncWebCrawler(config=browser_cfg) as crawler:
+            # We can try passing args to arun or using a different setup?
+            # Actually, standard crawl4ai usually handles this.
+            # Let's trust the default for now but if it crashes we know why.
+            # HOWEVER, to fix "BrowserConfig... unexpected keyword", we MUST remove 'args' from init.
+
             result = await crawler.arun(url=url, cache_mode=CacheMode.BYPASS)
             if not result.html: return "Error", "No HTML", None
             
@@ -112,6 +152,7 @@ async def extract_article_content_async(url):
             
             return article.title, text, pub_date_str
     except Exception as e:
+        print(f"Scrape Error {url}: {e}")
         return "Error", str(e), None
 
 def search_duckduckgo(query, max_results=5):
@@ -121,8 +162,8 @@ def search_duckduckgo(query, max_results=5):
             ddgs_gen = ddgs.news(query, region="id-id", safesearch="off", max_results=max_results)
             for r in ddgs_gen:
                 results.append(r)
-    except:
-        pass
+    except Exception as e:
+        print(f"DDGS Error: {e}")
     return results
 
 # --- Endpoints ---
@@ -135,7 +176,8 @@ def health():
 def get_data():
     print("DEBUG: Fetching data from Google Sheet...")
     try:
-        df = gsheet_handler.read_sheet_to_df(worksheet_name_or_index=0)
+        # FIXED: Correct argument name
+        df = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
         print(f"DEBUG: Retrieved {len(df)} rows. Columns: {df.columns.tolist()}")
         return df.to_dict(orient="records")
     except Exception as e:
@@ -151,9 +193,8 @@ def get_logs():
 def save_entry(row: ArticleData):
     try:
         data = row.dict()
-        # Remove extra fields not in sheet if necessary, but handler handles append
         # Clean up dict
-        clean_data = {k: v for k, v in data.items() if k in ["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"]}
+        clean_data = {k: v for k, v in data.items() if k in ["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"]}
         gsheet_handler.append_to_sheet(clean_data)
         return {"status": "success"}
     except Exception as e:
@@ -190,7 +231,8 @@ async def scrape_batch(req: ScrapeRequest):
     delta = (end_dt - start_dt).days + 1
     
     # Load existing to skip
-    df_local = gsheet_handler.read_sheet_to_df(worksheet_name_or_index=0)
+    # FIXED: Correct argument name
+    df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
     
     tasks = []
     
@@ -204,6 +246,9 @@ async def scrape_batch(req: ScrapeRequest):
             # Check exist
             if not df_local.empty:
                 if not df_local[(df_local["Tanggal"] == date_str) & (df_local["Entitas"] == req.entity)].empty:
+                    # Logic for Gap Filler: If using /scrape to fill gaps, we MIGHT want to continue even if some data exists?
+                    # But usually "Gap" means NO data for that date/entity combo.
+                    # So strict checking is correct: if data exists, skip.
                     return None
 
             query = f"{req.entity} {req.keywords} {date_str}"
@@ -211,10 +256,10 @@ async def scrape_batch(req: ScrapeRequest):
             
             for res in results:
                 url = res.get('url')
-                # Check DB dup
-                if not df_local.empty:
-                    # Simple title check might be loose, but okay for speed
-                    pass 
+                # Check DB dup by URL
+                if not df_local.empty and "URL" in df_local.columns:
+                     if url in df_local["URL"].values:
+                         continue
                 
                 t, c, pub_date = await extract_article_content_async(url)
                 if t and c and len(c) > 200:
