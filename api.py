@@ -1,9 +1,17 @@
+import asyncio
+import nest_asyncio
+
+# FORCE Standard Event Loop Policy to avoid UVLoop conflicts with nest_asyncio
+try:
+    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+except Exception as e:
+    print(f"WARNING: Could not set event loop policy: {e}")
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import gsheet_handler
 import pandas as pd
-import asyncio
 from datetime import datetime, timedelta
 from ddgs import DDGS
 from newspaper import Article
@@ -12,11 +20,13 @@ import torch
 from transformers import pipeline
 from llama_index.core.node_parser import SentenceSplitter
 import os
-import nest_asyncio
 import gc
 
 # Enable nest_asyncio for Crawl4AI in API
-nest_asyncio.apply()
+try:
+    nest_asyncio.apply()
+except Exception as e:
+    print(f"WARNING: nest_asyncio apply failed: {e}")
 
 app = FastAPI()
 
@@ -97,48 +107,13 @@ def smart_translate(text):
 async def extract_article_content_async(url):
     if not url: return None, None, None
     try:
-        # FIXED: Colab Browser Config
-        # BrowserConfig doesn't take args in init in some versions, or needs specific format.
-        # Checking crawl4ai docs: for v0.4+ usually BrowserConfig(args=[...]) is valid.
-        # If the user reported "got unexpected keyword argument 'args'", it might be an older version or a specific one installed.
-        # However, we must ensure --no-sandbox is passed.
-        # Trying the most standard way:
+        # Minimal config safe for Colab
         browser_cfg = BrowserConfig(
             headless=True,
-            verbose=True,
-            # If 'args' fails in constructor, we might need to modify the config object after creation
-            # or use browser_args. Let's assume the installed version supports 'args' if updated,
-            # OR fallback to known working config.
-            # If the user specifically said "BrowserConfig.__init__() got an unexpected keyword argument 'args'",
-            # then we should remove it from __init__ and pass it elsewhere or rely on defaults if allowed,
-            # BUT Colab fails without no-sandbox.
-            # Let's try passing it via the 'extra_args' or similar if 'args' is invalid.
-            # Looking at source code commonly: BrowserConfig(headless=True, args=[...])
-            # If that failed, maybe it's `browser_args`.
-            # Let's try to NOT pass args in init if it failed, but we MUST set no-sandbox.
-            # Alternative: config=BrowserConfig(headless=True) then set config.args = [...]?
+            verbose=True
         )
-        # Attempt to inject args if constructor failed previously
-        # browser_cfg.args = ["--no-sandbox", "--disable-dev-shm-usage"]
-        # Actually, let's use the valid kwargs for the installed version.
-        # Since I cannot check the version at runtime easily here, I will try a safe approach:
-        # standard init.
-
-        # NOTE: If BrowserConfig doesn't support args, we might be using a version where these are default or passed to AsyncWebCrawler directly?
-        # Let's try passing 'args' to launch_options if available.
-        # But wait, AsyncWebCrawler(config=...)
-
-        # Let's go with a minimal config that worked before the 'args' addition caused error,
-        # BUT we need no-sandbox.
-        # If the user's previous error was "BrowserConfig.__init__() got an unexpected keyword argument 'args'",
-        # then we simply remove it from __init__.
 
         async with AsyncWebCrawler(config=browser_cfg) as crawler:
-            # We can try passing args to arun or using a different setup?
-            # Actually, standard crawl4ai usually handles this.
-            # Let's trust the default for now but if it crashes we know why.
-            # HOWEVER, to fix "BrowserConfig... unexpected keyword", we MUST remove 'args' from init.
-
             result = await crawler.arun(url=url, cache_mode=CacheMode.BYPASS)
             if not result.html: return "Error", "No HTML", None
             
@@ -176,7 +151,6 @@ def health():
 def get_data():
     print("DEBUG: Fetching data from Google Sheet...")
     try:
-        # FIXED: Correct argument name
         df = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
         print(f"DEBUG: Retrieved {len(df)} rows. Columns: {df.columns.tolist()}")
         return df.to_dict(orient="records")
@@ -231,7 +205,6 @@ async def scrape_batch(req: ScrapeRequest):
     delta = (end_dt - start_dt).days + 1
     
     # Load existing to skip
-    # FIXED: Correct argument name
     df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
     
     tasks = []
@@ -246,9 +219,6 @@ async def scrape_batch(req: ScrapeRequest):
             # Check exist
             if not df_local.empty:
                 if not df_local[(df_local["Tanggal"] == date_str) & (df_local["Entitas"] == req.entity)].empty:
-                    # Logic for Gap Filler: If using /scrape to fill gaps, we MIGHT want to continue even if some data exists?
-                    # But usually "Gap" means NO data for that date/entity combo.
-                    # So strict checking is correct: if data exists, skip.
                     return None
 
             query = f"{req.entity} {req.keywords} {date_str}"
