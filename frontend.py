@@ -14,10 +14,14 @@ def get_data():
     try:
         r = requests.get(f"{API_URL}/data")
         if r.status_code == 200:
-            return pd.DataFrame(r.json())
-    except:
-        pass
-    return pd.DataFrame()
+            data = r.json()
+            if not data:
+                # Return empty dataframe with correct columns if API returns empty list
+                return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"])
+            return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Failed to fetch data: {e}")
+    return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"])
 
 def get_logs():
     try:
@@ -112,8 +116,14 @@ if app_mode == "📝 Input & Scraping":
         st.subheader("Data Monitor")
         if st.button("Refresh"):
             st.rerun()
+        
         df = get_data()
-        st.dataframe(df)
+        
+        if df.empty:
+            st.warning("Data kosong atau gagal memuat dari Google Sheet.")
+            st.write("Pastikan file Google Sheet 'data_berita' ada dan memiliki header.")
+        else:
+            st.dataframe(df)
 
 # ==========================================
 # APP B: TRANSLATOR
@@ -128,28 +138,34 @@ elif app_mode == "🔄 Translator":
     
     with tab1:
         if not df.empty:
-            mask = (df['Judul_Inggris'] == "") | (df['Isi_Inggris'] == "")
-            pending = df[mask]
-            st.info(f"Pending: {len(pending)}")
-            
-            edited_pend = st.data_editor(pending, key="pend_edit")
-            
-            if st.button("Translate Selected"):
-                # Simplification: Send all displayed/filtered rows
-                # In real usage, we iterate edited_pend
-                payload = {"rows": pending.to_dict(orient="records")}
-                with st.spinner("Translating..."):
-                    try:
-                        r = requests.post(f"{API_URL}/translate", json=payload)
-                        if r.status_code == 200:
-                            st.success("Translated & Updated!")
-                            time.sleep(1)
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"API Error: {e}")
+            # Safe access to columns even if empty
+            if 'Judul_Inggris' in df.columns:
+                mask = (df['Judul_Inggris'] == "") | (df['Isi_Inggris'] == "")
+                pending = df[mask]
+                st.info(f"Pending: {len(pending)}")
+                
+                edited_pend = st.data_editor(pending, key="pend_edit")
+                
+                if st.button("Translate Selected"):
+                    # Simplification: Send all displayed/filtered rows
+                    # In real usage, we iterate edited_pend
+                    payload = {"rows": pending.to_dict(orient="records")}
+                    with st.spinner("Translating..."):
+                        try:
+                            r = requests.post(f"{API_URL}/translate", json=payload)
+                            if r.status_code == 200:
+                                st.success("Translated & Updated!")
+                                time.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"API Error: {e}")
+            else:
+                st.warning("Kolom Judul_Inggris tidak ditemukan.")
+        else:
+            st.warning("Belum ada data.")
     
     with tab2:
-        if not df.empty:
+        if not df.empty and 'Judul_Inggris' in df.columns:
             mask = (df['Judul_Inggris'] != "")
             hist = df[mask]
             st.dataframe(hist)
