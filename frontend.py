@@ -4,36 +4,36 @@ import requests
 from datetime import datetime, timedelta
 import time
 
-# --- Config ---
-API_URL = "http://localhost:8000"
-
 st.set_page_config(page_title="Auto AI News System", page_icon="🤖", layout="wide")
 
+# --- Sidebar Config ---
+st.sidebar.title("🤖 Auto AI System")
+st.sidebar.header("⚙️ Configuration")
+api_url = st.sidebar.text_input("Backend API URL", value="http://localhost:8000")
+
 # --- Helper ---
-def get_data():
+def get_data(api_url):
     try:
-        r = requests.get(f"{API_URL}/data")
+        r = requests.get(f"{api_url}/data")
         if r.status_code == 200:
             data = r.json()
             if not data:
-                # Return empty dataframe with correct columns if API returns empty list
                 return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"])
             return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Failed to fetch data: {e}")
+        st.error(f"Failed to fetch data from {api_url}: {e}")
+        st.warning(f"Ensure the backend is running at {api_url}")
     return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris"])
 
-def get_logs():
+def get_logs(api_url):
     try:
-        r = requests.get(f"{API_URL}/logs")
+        r = requests.get(f"{api_url}/logs")
         if r.status_code == 200:
             return pd.DataFrame(r.json())
     except:
         pass
     return pd.DataFrame()
 
-# --- Sidebar ---
-st.sidebar.title("🤖 Auto AI System")
 app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
 
 # ==========================================
@@ -58,13 +58,13 @@ if app_mode == "📝 Input & Scraping":
                 if st.form_submit_button("Simpan"):
                     payload = {"Tanggal": str(date_input), "Entitas": entity_input, "Judul": t, "Isi": c}
                     try:
-                        r = requests.post(f"{API_URL}/save", json=payload)
+                        r = requests.post(f"{api_url}/save", json=payload)
                         if r.status_code == 200:
                             st.success("Tersimpan!")
                         else:
                             st.error(r.text)
-                    except:
-                        st.error("Backend Error")
+                    except Exception as e:
+                        st.error(f"Backend Error at {api_url}: {e}")
 
     # --- 2. BATCH SCRAPE ---
     elif sub_page == "Batch Scrape (Auto)":
@@ -82,7 +82,7 @@ if app_mode == "📝 Input & Scraping":
             }
             with st.spinner("Processing in background..."):
                 try:
-                    r = requests.post(f"{API_URL}/scrape", json=payload)
+                    r = requests.post(f"{api_url}/scrape", json=payload)
                     if r.status_code == 200:
                         data = r.json()
                         st.session_state.batch_results = pd.DataFrame(data)
@@ -90,7 +90,7 @@ if app_mode == "📝 Input & Scraping":
                     else:
                         st.error(f"Error: {r.text}")
                 except Exception as e:
-                    st.error(f"Connection Error: {e}")
+                    st.error(f"Connection Error at {api_url}: {e}")
                     
         if 'batch_results' in st.session_state and not st.session_state.batch_results.empty:
             edited = st.data_editor(st.session_state.batch_results)
@@ -99,8 +99,11 @@ if app_mode == "📝 Input & Scraping":
                 for _, row in edited.iterrows():
                     if row.get("Pilih", True):
                         payload = row.to_dict()
-                        requests.post(f"{API_URL}/save", json=payload)
-                        count += 1
+                        try:
+                            requests.post(f"{api_url}/save", json=payload)
+                            count += 1
+                        except Exception as e:
+                             st.error(f"Save failed: {e}")
                 st.success(f"Saved {count} items.")
 
     # --- 3. GAP FILLER ---
@@ -117,7 +120,7 @@ if app_mode == "📝 Input & Scraping":
         if st.button("Refresh"):
             st.rerun()
         
-        df = get_data()
+        df = get_data(api_url)
         
         if df.empty:
             st.warning("Data kosong atau gagal memuat dari Google Sheet.")
@@ -134,7 +137,7 @@ elif app_mode == "🔄 Translator":
     tab1, tab2 = st.tabs(["Pending", "History"])
     
     # Refresh data
-    df = get_data()
+    df = get_data(api_url)
     
     with tab1:
         if not df.empty:
@@ -152,13 +155,13 @@ elif app_mode == "🔄 Translator":
                     payload = {"rows": pending.to_dict(orient="records")}
                     with st.spinner("Translating..."):
                         try:
-                            r = requests.post(f"{API_URL}/translate", json=payload)
+                            r = requests.post(f"{api_url}/translate", json=payload)
                             if r.status_code == 200:
                                 st.success("Translated & Updated!")
                                 time.sleep(1)
                                 st.rerun()
                         except Exception as e:
-                            st.error(f"API Error: {e}")
+                            st.error(f"API Error at {api_url}: {e}")
             else:
                 st.warning("Kolom Judul_Inggris tidak ditemukan.")
         else:
