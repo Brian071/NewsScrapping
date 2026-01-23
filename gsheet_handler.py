@@ -1,11 +1,11 @@
-import os
 import gspread
 import pandas as pd
 from google.auth import default
 import time
+from gspread.utils import rowcol_to_a1
 
 # Default Spreadsheet ID provided by user
-DEFAULT_SPREADSHEET_ID = os.getenv("GSHEET")
+DEFAULT_SPREADSHEET_ID = "1U8xeumDGJckZsTqIMyNr0DBfg0Bv9_IRpDV6XdN59Hw"
 
 def get_creds():
     try:
@@ -86,8 +86,15 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name_or
         val = row_data.get(h, "")
         row_values.append(str(val))
         
-    ws.append_row(row_values)
-    return True
+    try:
+        ws.append_row(row_values)
+        return True
+    except Exception as e:
+        if "Quota exceeded" in str(e):
+            time.sleep(2) # Simple backoff
+            ws.append_row(row_values)
+            return True
+        raise e
 
 def find_row_index_by_keys(ws, date, entity, title):
     """
@@ -121,10 +128,21 @@ def update_row_in_sheet(date, entity, old_title, new_data_dict, sheet_id=DEFAULT
     
     headers = ws.row_values(1)
     
+    # Batch update is better if multiple cells change in same row
+    cells_to_update = []
+    
     for key, value in new_data_dict.items():
         if key in headers:
             col_idx = headers.index(key) + 1
-            ws.update_cell(row_idx, col_idx, str(value))
+            # gspread update_cell is slow, use batch later if needed or simply retry
+            try:
+                ws.update_cell(row_idx, col_idx, str(value))
+            except Exception as e:
+                if "Quota exceeded" in str(e):
+                    time.sleep(2)
+                    ws.update_cell(row_idx, col_idx, str(value))
+                else:
+                    raise e
             
     return True
 
@@ -151,7 +169,14 @@ def bulk_append(df_batch, sheet_id=DEFAULT_SPREADSHEET_ID):
         rows_to_append.append(row_vals)
         
     if rows_to_append:
-        ws.append_rows(rows_to_append)
+        try:
+            ws.append_rows(rows_to_append)
+        except Exception as e:
+            if "Quota exceeded" in str(e):
+                time.sleep(5)
+                ws.append_rows(rows_to_append)
+            else:
+                raise e
 
 # --- Log Specific Functions ---
 
