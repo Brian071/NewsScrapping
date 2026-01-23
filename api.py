@@ -124,7 +124,9 @@ def health():
 
 @app.get("/data")
 def get_data():
+    print("DEBUG: Fetching data from Google Sheet...")
     df = gsheet_handler.read_sheet_to_df(worksheet_name_or_index=0)
+    print(f"DEBUG: Retrieved {len(df)} rows. Columns: {df.columns.tolist()}")
     return df.to_dict(orient="records")
 
 @app.get("/logs")
