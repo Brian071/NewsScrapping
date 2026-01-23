@@ -54,6 +54,9 @@ def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berit
         
         ws = get_worksheet(sheet_id, target_name)
         data = ws.get_all_records()
+        
+        print(f"DEBUG: read_sheet_to_df found {len(data)} records in {target_name}")
+        
         df = pd.DataFrame(data)
         
         # Ensure standard columns exist for MAIN sheet only
