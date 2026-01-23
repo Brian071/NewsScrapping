@@ -1,9 +1,14 @@
+import asyncio
+import nest_asyncio
+
+# FORCE Standard Event Loop Policy to avoid UVLoop conflicts in Colab/Streamlit
+# This must be done before any other async libraries are imported or loops created.
+asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import time
-import asyncio
-import nest_asyncio
 
 # Local Modules
 import gsheet_handler
@@ -11,10 +16,10 @@ import scraper_service
 import translator_utils
 
 # Enable nested asyncio for Streamlit
+# Now that we forced DefaultEventLoopPolicy, this should work without crashing on uvloop
 try:
     nest_asyncio.apply()
 except Exception as e:
-    # Log warning if patching fails, but continue to avoid crashing on import
     print(f"WARNING: Failed to patch asyncio loop with nest_asyncio: {e}")
 
 st.set_page_config(page_title="Auto AI News System", page_icon="🤖", layout="wide")
@@ -28,11 +33,8 @@ def run_async(coroutine):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-    # Try patching the specific loop if global patch failed or didn't catch this one
-    try:
-        nest_asyncio.apply(loop)
-    except Exception:
-        pass
+    # Ensure this specific loop is patched
+    nest_asyncio.apply(loop)
 
     return loop.run_until_complete(coroutine)
 
