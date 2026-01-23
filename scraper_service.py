@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from newspaper import Article
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
 import gsheet_handler
