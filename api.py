@@ -1,19 +1,14 @@
 import asyncio
 import nest_asyncio
-
-# FORCE Standard Event Loop Policy to avoid UVLoop conflicts with nest_asyncio
-try:
-    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
-except Exception as e:
-    print(f"WARNING: Could not set event loop policy: {e}")
-
+import uuid
+import time
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import gsheet_handler
 import pandas as pd
 from datetime import datetime, timedelta
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 from newspaper import Article
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
 import torch
@@ -22,13 +17,23 @@ from llama_index.core.node_parser import SentenceSplitter
 import os
 import gc
 
-# Enable nest_asyncio for Crawl4AI in API
+# FORCE Standard Event Loop Policy
+try:
+    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+except Exception as e:
+    print(f"WARNING: Could not set event loop policy: {e}")
+
+# Enable nest_asyncio
 try:
     nest_asyncio.apply()
 except Exception as e:
     print(f"WARNING: nest_asyncio apply failed: {e}")
 
 app = FastAPI()
+
+# --- Global Job Store ---
+# Format: { job_id: { "status": "running"|"completed"|"failed", "results": [], "msg": "", "total": 0, "processed": 0 } }
+JOBS = {}
 
 # --- Models ---
 class ScrapeRequest(BaseModel):
@@ -75,7 +80,6 @@ def get_translator():
     if _translator is None:
         print("Loading NLLB-200 model (Lazy Load)...")
         device = 0 if torch.cuda.is_available() else -1
-        # Use lighter model if full version crashes: facebook/nllb-200-distilled-600M
         _translator = pipeline("translation", model="facebook/nllb-200-distilled-600M", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
     return _translator
 
@@ -141,6 +145,87 @@ def search_duckduckgo(query, max_results=5):
         print(f"DDGS Error: {e}")
     return results
 
+# --- Async Worker ---
+async def run_scrape_job(job_id: str, req: ScrapeRequest):
+    try:
+        JOBS[job_id]["status"] = "running"
+        print(f"Starting Job {job_id} for {req.entity}...")
+
+        start_dt = datetime.strptime(req.start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(req.end_date, "%Y-%m-%d")
+        delta = (end_dt - start_dt).days + 1
+        JOBS[job_id]["total"] = delta
+
+        # Load existing data for deduplication
+        df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
+        existing_urls = set(df_local["URL"].dropna().values) if not df_local.empty and "URL" in df_local.columns else set()
+
+        # Track URLs seen in THIS job to prevent duplicates within results
+        job_seen_urls = set()
+
+        tasks = []
+        sem = asyncio.Semaphore(5) # Limit concurrency
+
+        async def process_date(date_obj):
+            async with sem:
+                date_str = date_obj.strftime("%Y-%m-%d")
+
+                # OPTIONAL: Check if we already have data for this Date+Entity in DB?
+                # The user wants "Gap Filler" so we might want to skip if date exists.
+                # However, "Batch Scrape" might want to add more.
+                # For now, we rely on URL uniqueness.
+
+                query = f"{req.entity} {req.keywords} {date_str}"
+                results = await asyncio.to_thread(search_duckduckgo, query)
+
+                for res in results:
+                    url = res.get('url')
+                    if not url: continue
+
+                    # Deduplication Checks
+                    if url in existing_urls:
+                        continue
+                    if url in job_seen_urls:
+                        continue
+
+                    # Mark seen immediately (optimistic)
+                    job_seen_urls.add(url)
+
+                    t, c, pub_date = await extract_article_content_async(url)
+                    if t and c and len(c) > 200:
+                        return {
+                            "Pilih": True,
+                            "Tanggal": pub_date if pub_date else date_str,
+                            "Entitas": req.entity,
+                            "Judul": t,
+                            "Isi": c,
+                            "URL": url,
+                            "Judul_Inggris": "",
+                            "Isi_Inggris": ""
+                        }
+                return None
+
+        for i in range(delta):
+            date_obj = start_dt + timedelta(days=i)
+            tasks.append(process_date(date_obj))
+
+        # Process as they complete
+        processed_count = 0
+        for future in asyncio.as_completed(tasks):
+            res = await future
+            processed_count += 1
+            JOBS[job_id]["processed"] = processed_count
+            if res:
+                JOBS[job_id]["results"].append(res)
+
+        JOBS[job_id]["status"] = "completed"
+        print(f"Job {job_id} Completed. Found {len(JOBS[job_id]['results'])} articles.")
+
+    except Exception as e:
+        print(f"Job {job_id} Failed: {e}")
+        JOBS[job_id]["status"] = "failed"
+        JOBS[job_id]["msg"] = str(e)
+
 # --- Endpoints ---
 
 @app.get("/health")
@@ -149,10 +234,8 @@ def health():
 
 @app.get("/data")
 def get_data():
-    print("DEBUG: Fetching data from Google Sheet...")
     try:
         df = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
-        print(f"DEBUG: Retrieved {len(df)} rows. Columns: {df.columns.tolist()}")
         return df.to_dict(orient="records")
     except Exception as e:
         print(f"ERROR in /data: {e}")
@@ -167,7 +250,6 @@ def get_logs():
 def save_entry(row: ArticleData):
     try:
         data = row.dict()
-        # Clean up dict
         clean_data = {k: v for k, v in data.items() if k in ["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"]}
         gsheet_handler.append_to_sheet(clean_data)
         return {"status": "success"}
@@ -198,73 +280,41 @@ def log_empty(req: LogEmptyRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# --- Job Endpoints ---
+
+@app.post("/start_scrape")
+async def start_scrape(req: ScrapeRequest, background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    JOBS[job_id] = {
+        "status": "queued",
+        "results": [],
+        "msg": "",
+        "total": 0,
+        "processed": 0,
+        "created_at": time.time()
+    }
+    background_tasks.add_task(run_scrape_job, job_id, req)
+    return {"job_id": job_id}
+
+@app.get("/job/{job_id}")
+def get_job_status(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
 @app.post("/scrape")
-async def scrape_batch(req: ScrapeRequest):
-    start_dt = datetime.strptime(req.start_date, "%Y-%m-%d")
-    end_dt = datetime.strptime(req.end_date, "%Y-%m-%d")
-    delta = (end_dt - start_dt).days + 1
-    
-    # Load existing to skip
-    df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
-    
-    tasks = []
-    
-    # Semaphore to limit concurrency
-    sem = asyncio.Semaphore(5)
-
-    async def process_date(date_obj):
-        async with sem:
-            date_str = date_obj.strftime("%Y-%m-%d")
-            
-            # Check exist
-            if not df_local.empty:
-                if not df_local[(df_local["Tanggal"] == date_str) & (df_local["Entitas"] == req.entity)].empty:
-                    return None
-
-            query = f"{req.entity} {req.keywords} {date_str}"
-            results = await asyncio.to_thread(search_duckduckgo, query)
-            
-            for res in results:
-                url = res.get('url')
-                # Check DB dup by URL
-                if not df_local.empty and "URL" in df_local.columns:
-                     if url in df_local["URL"].values:
-                         continue
-                
-                t, c, pub_date = await extract_article_content_async(url)
-                if t and c and len(c) > 200:
-                    return {
-                        "Pilih": True,
-                        "Tanggal": pub_date if pub_date else date_str,
-                        "Entitas": req.entity,
-                        "Judul": t,
-                        "Isi": c,
-                        "URL": url,
-                        "Judul_Inggris": "",
-                        "Isi_Inggris": ""
-                    }
-            return None
-
-    for i in range(delta):
-        date_obj = start_dt + timedelta(days=i)
-        tasks.append(process_date(date_obj))
-        
-    results = await asyncio.gather(*tasks)
-    # Filter None
-    found = [r for r in results if r]
-    return found
+def scrape_deprecated():
+    raise HTTPException(status_code=400, detail="Use /start_scrape for background jobs.")
 
 @app.post("/translate")
 async def translate_batch(req: TranslateRequest):
     results = []
-    # Trigger model load only here
     get_translator()
     
     for row in req.rows:
-        # Check if already translated
         j_ing = row.Judul_Inggris
         i_ing = row.Isi_Inggris
-        
         updated_fields = {}
         
         if not j_ing:
@@ -275,18 +325,14 @@ async def translate_batch(req: TranslateRequest):
             i_ing = smart_translate(row.Isi)
             updated_fields["Isi_Inggris"] = i_ing
             
-        # Update Sheet immediately
         if updated_fields:
             try:
                 gsheet_handler.update_row_in_sheet(row.Tanggal, row.Entitas, row.Judul, updated_fields)
             except Exception as e:
-                print(f"Update failed for {row.Judul}: {e}")
+                print(f"Update failed: {e}")
         
-        # Return updated object
         row.Judul_Inggris = j_ing
         row.Isi_Inggris = i_ing
         results.append(row)
     
-    # Try to cleanup memory if heavy
-    # gc.collect()
     return results

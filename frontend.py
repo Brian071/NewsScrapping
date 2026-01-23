@@ -6,7 +6,7 @@ import time
 import asyncio
 import nest_asyncio
 
-# Force default loop policy for Colab stability (just in case)
+# Force default loop policy for Colab stability
 asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 try:
     nest_asyncio.apply()
@@ -20,6 +20,10 @@ if 'batch_results' not in st.session_state:
     st.session_state.batch_results = pd.DataFrame()
 if 'gap_results' not in st.session_state:
     st.session_state.gap_results = pd.DataFrame()
+if 'job_id' not in st.session_state:
+    st.session_state.job_id = None
+if 'job_type' not in st.session_state: # 'batch' or 'gap'
+    st.session_state.job_type = None
 
 # --- Sidebar Config ---
 st.sidebar.title("🤖 Auto AI System")
@@ -42,6 +46,60 @@ def get_data(api_url):
 
 app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
 
+# --- Job Polling Widget ---
+def job_polling_widget():
+    if st.session_state.job_id:
+        st.divider()
+        st.info(f"⏳ Background Job Running (ID: {st.session_state.job_id})...")
+
+        try:
+            r = requests.get(f"{api_url}/job/{st.session_state.job_id}")
+            if r.status_code == 200:
+                job_data = r.json()
+                status = job_data.get("status")
+                processed = job_data.get("processed", 0)
+                total = job_data.get("total", 1)
+                results = job_data.get("results", [])
+
+                # Progress Bar
+                progress = min(1.0, max(0.0, processed / total)) if total > 0 else 0
+                st.progress(progress)
+                st.write(f"Processed: {processed} / {total}")
+
+                # Preview current results
+                if results:
+                    st.write(f"Found {len(results)} articles so far...")
+                    # Optional: Show snippet
+                    # st.dataframe(pd.DataFrame(results).tail(3))
+
+                if status == "completed":
+                    st.success("Job Completed!")
+                    df_res = pd.DataFrame(results)
+
+                    if st.session_state.job_type == "batch":
+                        st.session_state.batch_results = df_res
+                    elif st.session_state.job_type == "gap":
+                        st.session_state.gap_results = df_res
+
+                    st.session_state.job_id = None
+                    st.session_state.job_type = None
+                    time.sleep(1)
+                    st.rerun()
+                elif status == "failed":
+                    st.error(f"Job Failed: {job_data.get('msg')}")
+                    st.session_state.job_id = None
+                    st.session_state.job_type = None
+                else:
+                    # Still running, refresh
+                    time.sleep(2)
+                    st.rerun()
+            else:
+                st.error("Failed to check job status.")
+        except Exception as e:
+            st.warning(f"Connection issue: {e}")
+            time.sleep(5)
+            st.rerun()
+
 # ==========================================
 # APP A: INPUT & SCRAPING
 # ==========================================
@@ -49,6 +107,9 @@ if app_mode == "📝 Input & Scraping":
     st.title("📝 Input & Scraping Dashboard")
     
     sub_page = st.sidebar.radio("Menu", ["Input Manual", "Batch Scrape (Auto)", "Gap Filler (Manual Scrape)", "Monitor Data"])
+
+    # Global Job Status
+    job_polling_widget()
 
     # --- 1. INPUT MANUAL ---
     if sub_page == "Input Manual":
@@ -90,28 +151,27 @@ if app_mode == "📝 Input & Scraping":
         entity = c3.selectbox("Entity", ["AirAsia", "Garuda Indonesia"], key="batch_ent")
         kw = st.text_input("Keywords")
         
-        if st.button("Start Batch Scrape"):
+        if st.button("Start Batch Scrape", disabled=(st.session_state.job_id is not None)):
             payload = {
                 "start_date": str(start), "end_date": str(end),
                 "entity": entity, "keywords": kw
             }
-            with st.spinner("Processing in background..."):
-                try:
-                    r = requests.post(f"{api_url}/scrape", json=payload)
-                    if r.status_code == 200:
-                        data = r.json()
-                        st.session_state.batch_results = pd.DataFrame(data)
-                        st.success(f"Found {len(data)} articles!")
-                        st.rerun() # Force rerun to show results immediately and update state
-                    else:
-                        st.error(f"Error: {r.text}")
-                except Exception as e:
-                    st.error(f"Connection Error at {api_url}: {e}")
+            try:
+                r = requests.post(f"{api_url}/start_scrape", json=payload)
+                if r.status_code == 200:
+                    data = r.json()
+                    st.session_state.job_id = data["job_id"]
+                    st.session_state.job_type = "batch"
+                    st.rerun()
+                else:
+                    st.error(f"Error: {r.text}")
+            except Exception as e:
+                st.error(f"Connection Error at {api_url}: {e}")
 
         # Display Results from Session State
         if not st.session_state.batch_results.empty:
             st.divider()
-            st.write("### 📥 Scraped Results")
+            st.write(f"### 📥 Scraped Results ({len(st.session_state.batch_results)})")
 
             c_clear, _ = st.columns([1, 5])
             if c_clear.button("🗑️ Clear Results"):
@@ -144,33 +204,29 @@ if app_mode == "📝 Input & Scraping":
         start_gap = c1.date_input("Range Start", key="gap_start")
         end_gap = c2.date_input("Range End", key="gap_end")
 
-        if st.button("🔍 Scan & Fill Gaps"):
+        if st.button("🔍 Scan & Fill Gaps", disabled=(st.session_state.job_id is not None)):
             payload = {
                 "start_date": str(start_gap),
                 "end_date": str(end_gap),
                 "entity": entity_gap,
                 "keywords": kw_gap
             }
-            with st.spinner("Scanning for missing dates and scraping..."):
-                try:
-                    r = requests.post(f"{api_url}/scrape", json=payload)
-                    if r.status_code == 200:
-                        data = r.json()
-                        if data:
-                            st.session_state.gap_results = pd.DataFrame(data)
-                            st.success(f"Filled gaps! Found {len(data)} new articles.")
-                            st.rerun()
-                        else:
-                            st.info("No gaps found or no articles found for missing dates.")
-                    else:
-                        st.error(f"Error: {r.text}")
-                except Exception as e:
-                     st.error(f"Connection Error: {e}")
+            try:
+                r = requests.post(f"{api_url}/start_scrape", json=payload)
+                if r.status_code == 200:
+                    data = r.json()
+                    st.session_state.job_id = data["job_id"]
+                    st.session_state.job_type = "gap"
+                    st.rerun()
+                else:
+                    st.error(f"Error: {r.text}")
+            except Exception as e:
+                st.error(f"Connection Error: {e}")
 
         # Display Results from Session State
         if not st.session_state.gap_results.empty:
             st.divider()
-            st.write("### 📥 Gap Filler Results")
+            st.write(f"### 📥 Gap Filler Results ({len(st.session_state.gap_results)})")
 
             c_clear_gap, _ = st.columns([1, 5])
             if c_clear_gap.button("🗑️ Clear Gap Results"):
@@ -192,7 +248,13 @@ if app_mode == "📝 Input & Scraping":
     # --- 4. MONITOR ---
     elif sub_page == "Monitor Data":
         st.subheader("Data Monitor")
-        if st.button("Refresh"):
+
+        c1, c2, c3, c4 = st.columns(4)
+        m_start = c1.date_input("Filter Start Date", value=datetime.now() - timedelta(days=30))
+        m_end = c2.date_input("Filter End Date", value=datetime.now())
+        m_entity = c3.selectbox("Filter Entity", ["All", "AirAsia", "Garuda Indonesia"])
+
+        if c4.button("Refresh"):
             st.rerun()
         
         df = get_data(api_url)
@@ -200,7 +262,21 @@ if app_mode == "📝 Input & Scraping":
         if df.empty:
             st.warning("Data kosong atau gagal memuat.")
         else:
-            st.dataframe(df)
+            # Apply Filters
+            if "Tanggal" in df.columns:
+                # Normalize dates
+                df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce')
+
+                mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
+                if m_entity != "All":
+                    mask = mask & (df["Entitas"] == m_entity)
+
+                df_filtered = df[mask].sort_values(by="Tanggal", ascending=False)
+                st.write(f"Showing {len(df_filtered)} records.")
+                st.dataframe(df_filtered)
+            else:
+                st.warning("Column 'Tanggal' not found for filtering.")
+                st.dataframe(df)
 
 # ==========================================
 # APP B: TRANSLATOR
