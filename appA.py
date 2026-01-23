@@ -11,6 +11,7 @@ import asyncio
 import nest_asyncio
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
 import os
+import calendar
 
 # Apply nest_asyncio to allow nested event loops (crucial for Streamlit + Playwright)
 # nest_asyncio.apply() # Might cause issues in some envs, check later if needed.
@@ -41,7 +42,10 @@ if 'search_results' not in st.session_state:
 # --- Helper Functions ---
 
 def load_data():
-    return gsheet_handler.read_sheet_to_df()
+    return gsheet_handler.read_sheet_to_df(worksheet_name_or_index=0)
+
+def load_logs():
+    return gsheet_handler.get_empty_logs()
 
 # --- Scraping Functions (Async Wrappers) ---
 
@@ -92,7 +96,7 @@ def search_duckduckgo(query, search_type="news", max_results=10):
 
 # --- Sidebar Navigation ---
 st.sidebar.title("Navigasi")
-page = st.sidebar.radio("Go to", ["📝 Input & Scraping", "🚀 Batch Scrape", "📊 Dashboard", "🛠️ Manage Data"])
+page = st.sidebar.radio("Go to", ["📝 Input & Scraping", "🚀 Batch Scrape", "🕵️ Manual Scrape / Gap Filler", "📊 Dashboard", "🛠️ Manage Data"])
 
 # --- PAGE 1: INPUT & SCRAPING ---
 if page == "📝 Input & Scraping":
@@ -306,7 +310,123 @@ elif page == "🚀 Batch Scrape":
     else:
         st.write("Belum ada draft. Klik Generate Draft.")
 
-# --- PAGE 3: DASHBOARD ---
+# --- PAGE 3: MANUAL SCRAPE / GAP FILLER (NEW) ---
+elif page == "🕵️ Manual Scrape / Gap Filler":
+    st.title("🕵️ Manual Scrape / Gap Filler")
+    st.info("Cari tanggal yang belum memiliki data (kosong), lalu isi secara manual atau tandai sebagai 'Tidak Ada Berita'.")
+    
+    col1, col2 = st.columns(2)
+    start_d = col1.date_input("Dari Tanggal", value=datetime.now() - timedelta(days=30))
+    end_d = col2.date_input("Sampai Tanggal", value=datetime.now())
+    target_entity = st.selectbox("Entitas", ["AirAsia", "Garuda Indonesia"], key="gap_entity")
+    
+    if st.button("🔍 Scan Gap Data"):
+        with st.spinner("Scanning..."):
+            # Fetch data
+            df_main = load_data()
+            df_log = load_logs()
+            
+            # Normalize dates
+            date_range = pd.date_range(start=start_d, end=end_d)
+            all_dates = [d.strftime("%Y-%m-%d") for d in date_range]
+            
+            # Filter Main Data
+            exist_main = set()
+            if not df_main.empty:
+                df_main_filtered = df_main[df_main["Entitas"] == target_entity]
+                exist_main = set(df_main_filtered["Tanggal"].astype(str).tolist())
+                
+            # Filter Logs
+            exist_log = set()
+            if not df_log.empty:
+                df_log_filtered = df_log[df_log["Entitas"] == target_entity]
+                exist_log = set(df_log_filtered["Tanggal"].astype(str).tolist())
+                
+            missing_data = []
+            for d_str in all_dates:
+                if d_str not in exist_main and d_str not in exist_log:
+                    dt = datetime.strptime(d_str, "%Y-%m-%d")
+                    day_name = calendar.day_name[dt.weekday()]
+                    is_weekend = "Yes" if dt.weekday() >= 5 else "No"
+                    missing_data.append({
+                        "Tanggal": d_str,
+                        "Hari": day_name,
+                        "Weekend": is_weekend
+                    })
+            
+            st.session_state.missing_dates = pd.DataFrame(missing_data)
+            
+    if 'missing_dates' in st.session_state and not st.session_state.missing_dates.empty:
+        st.write(f"Ditemukan **{len(st.session_state.missing_dates)}** tanggal kosong.")
+        
+        # Selection
+        selected_date_row = st.selectbox(
+            "Pilih Tanggal untuk Diproses:", 
+            st.session_state.missing_dates["Tanggal"].tolist(),
+            format_func=lambda x: f"{x} ({st.session_state.missing_dates[st.session_state.missing_dates['Tanggal'] == x]['Hari'].values[0]})"
+        )
+        
+        if selected_date_row:
+            st.divider()
+            st.subheader(f"Proses Tanggal: {selected_date_row} ({target_entity})")
+            
+            # Search Links
+            query = f"{target_entity} berita {selected_date_row}"
+            google_link = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+            ddg_link = f"https://duckduckgo.com/?q={query.replace(' ', '+')}"
+            
+            st.markdown(f"""
+            **Langkah 1: Cari Manual**
+            *   [Buka Pencarian Google]({google_link})
+            *   [Buka Pencarian DuckDuckGo]({ddg_link})
+            """)
+            
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                st.markdown("### Opsi A: Ditemukan Berita")
+                with st.form("manual_found"):
+                    m_title = st.text_input("Judul Berita")
+                    m_content = st.text_area("Isi Berita")
+                    found_submit = st.form_submit_button("💾 Simpan ke Dataset Utama")
+                    
+                    if found_submit:
+                        if m_title and m_content:
+                            row_data = {
+                                "Tanggal": selected_date_row,
+                                "Entitas": target_entity,
+                                "Judul": m_title,
+                                "Isi": m_content,
+                                "Judul_Inggris": "",
+                                "Isi_Inggris": ""
+                            }
+                            try:
+                                gsheet_handler.append_to_sheet(row_data)
+                                st.success("Tersimpan!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(str(e))
+                        else:
+                            st.error("Isi judul dan konten.")
+                            
+            with col_b:
+                st.markdown("### Opsi B: Tidak Ada Berita")
+                with st.form("manual_pass"):
+                    reason = st.text_input("Alasan (Opsional)", value="Sudah dicek manual, nihil.")
+                    pass_submit = st.form_submit_button("🚫 Tandai Kosong (Pass)")
+                    
+                    if pass_submit:
+                        try:
+                            gsheet_handler.log_empty_date(selected_date_row, target_entity, reason)
+                            st.success("Ditandai kosong!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(str(e))
+                            
+    elif 'missing_dates' in st.session_state:
+        st.success("Semua tanggal sudah terisi atau ditandai!")
+
+# --- PAGE 5: DASHBOARD ---
 elif page == "📊 Dashboard":
     st.title("📊 Dashboard Monitoring")
     
@@ -336,7 +456,7 @@ elif page == "📊 Dashboard":
     else:
         st.warning("Data kosong untuk rentang tanggal ini.")
 
-# --- PAGE 4: MANAGE DATA ---
+# --- PAGE 6: MANAGE DATA ---
 elif page == "🛠️ Manage Data":
     st.title("🛠️ Kelola Data (Edit / Hapus)")
     
