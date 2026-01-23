@@ -13,6 +13,7 @@ from transformers import pipeline
 from llama_index.core.node_parser import SentenceSplitter
 import os
 import nest_asyncio
+import gc
 
 # Enable nest_asyncio for Crawl4AI in API
 nest_asyncio.apply()
@@ -55,22 +56,30 @@ class LogEmptyRequest(BaseModel):
 class TranslateRequest(BaseModel):
     rows: List[ArticleData]
 
-# --- Resources ---
+# --- Resources (Lazy Loading) ---
 _translator = None
 _splitter = None
 
-def load_resources():
-    global _translator, _splitter
+def get_translator():
+    global _translator
     if _translator is None:
-        print("Loading NLLB-200 model...")
+        print("Loading NLLB-200 model (Lazy Load)...")
         device = 0 if torch.cuda.is_available() else -1
-        _translator = pipeline("translation", model="facebook/nllb-200-1.3B", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
+        # Use lighter model if full version crashes: facebook/nllb-200-distilled-600M
+        _translator = pipeline("translation", model="facebook/nllb-200-distilled-600M", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
+    return _translator
+
+def get_splitter():
+    global _splitter
     if _splitter is None:
+        print("Loading SentenceSplitter (Lazy Load)...")
         _splitter = SentenceSplitter(chunk_size=64, chunk_overlap=0)
-    return _translator, _splitter
+    return _splitter
 
 def smart_translate(text):
-    translator, splitter = load_resources()
+    translator = get_translator()
+    splitter = get_splitter()
+    
     if not text or not isinstance(text, str) or text.strip() == "":
         return ""
     chunks = splitter.split_text(text)
@@ -125,9 +134,13 @@ def health():
 @app.get("/data")
 def get_data():
     print("DEBUG: Fetching data from Google Sheet...")
-    df = gsheet_handler.read_sheet_to_df(worksheet_name_or_index=0)
-    print(f"DEBUG: Retrieved {len(df)} rows. Columns: {df.columns.tolist()}")
-    return df.to_dict(orient="records")
+    try:
+        df = gsheet_handler.read_sheet_to_df(worksheet_name_or_index=0)
+        print(f"DEBUG: Retrieved {len(df)} rows. Columns: {df.columns.tolist()}")
+        return df.to_dict(orient="records")
+    except Exception as e:
+        print(f"ERROR in /data: {e}")
+        return []
 
 @app.get("/logs")
 def get_logs():
@@ -229,6 +242,9 @@ async def scrape_batch(req: ScrapeRequest):
 @app.post("/translate")
 async def translate_batch(req: TranslateRequest):
     results = []
+    # Trigger model load only here
+    get_translator()
+    
     for row in req.rows:
         # Check if already translated
         j_ing = row.Judul_Inggris
@@ -255,5 +271,7 @@ async def translate_batch(req: TranslateRequest):
         row.Judul_Inggris = j_ing
         row.Isi_Inggris = i_ing
         results.append(row)
-        
+    
+    # Try to cleanup memory if heavy
+    # gc.collect()
     return results
