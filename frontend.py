@@ -15,6 +15,12 @@ except:
 
 st.set_page_config(page_title="Auto AI News System", page_icon="🤖", layout="wide")
 
+# --- Session State Initialization ---
+if 'batch_results' not in st.session_state:
+    st.session_state.batch_results = pd.DataFrame()
+if 'gap_results' not in st.session_state:
+    st.session_state.gap_results = pd.DataFrame()
+
 # --- Sidebar Config ---
 st.sidebar.title("🤖 Auto AI System")
 st.sidebar.header("⚙️ Configuration")
@@ -96,14 +102,25 @@ if app_mode == "📝 Input & Scraping":
                         data = r.json()
                         st.session_state.batch_results = pd.DataFrame(data)
                         st.success(f"Found {len(data)} articles!")
+                        st.rerun() # Force rerun to show results immediately and update state
                     else:
                         st.error(f"Error: {r.text}")
                 except Exception as e:
                     st.error(f"Connection Error at {api_url}: {e}")
-                    
-        if 'batch_results' in st.session_state and not st.session_state.batch_results.empty:
-            edited = st.data_editor(st.session_state.batch_results)
-            if st.button("Save Selected"):
+
+        # Display Results from Session State
+        if not st.session_state.batch_results.empty:
+            st.divider()
+            st.write("### 📥 Scraped Results")
+
+            c_clear, _ = st.columns([1, 5])
+            if c_clear.button("🗑️ Clear Results"):
+                st.session_state.batch_results = pd.DataFrame()
+                st.rerun()
+
+            edited = st.data_editor(st.session_state.batch_results, key="batch_editor")
+
+            if st.button("💾 Save Selected Results"):
                 count = 0
                 for _, row in edited.iterrows():
                     if row.get("Pilih", True):
@@ -136,15 +153,13 @@ if app_mode == "📝 Input & Scraping":
             }
             with st.spinner("Scanning for missing dates and scraping..."):
                 try:
-                    # We reuse /scrape but the logic is slightly different:
-                    # The backend /scrape already checks for existence (skip if exists).
-                    # So calling /scrape acts as a Gap Filler naturally.
                     r = requests.post(f"{api_url}/scrape", json=payload)
                     if r.status_code == 200:
                         data = r.json()
                         if data:
                             st.session_state.gap_results = pd.DataFrame(data)
                             st.success(f"Filled gaps! Found {len(data)} new articles.")
+                            st.rerun()
                         else:
                             st.info("No gaps found or no articles found for missing dates.")
                     else:
@@ -152,10 +167,18 @@ if app_mode == "📝 Input & Scraping":
                 except Exception as e:
                      st.error(f"Connection Error: {e}")
 
-        if 'gap_results' in st.session_state and not st.session_state.gap_results.empty:
-            st.write("Found Articles:")
-            edited_gap = st.data_editor(st.session_state.gap_results)
-            if st.button("Save Filled Gaps"):
+        # Display Results from Session State
+        if not st.session_state.gap_results.empty:
+            st.divider()
+            st.write("### 📥 Gap Filler Results")
+
+            c_clear_gap, _ = st.columns([1, 5])
+            if c_clear_gap.button("🗑️ Clear Gap Results"):
+                st.session_state.gap_results = pd.DataFrame()
+                st.rerun()
+
+            edited_gap = st.data_editor(st.session_state.gap_results, key="gap_editor")
+            if st.button("💾 Save Filled Gaps"):
                 count = 0
                 for _, row in edited_gap.iterrows():
                     if row.get("Pilih", True):
