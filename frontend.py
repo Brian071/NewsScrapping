@@ -50,6 +50,16 @@ if not check_backend_health(api_url):
     st.stop()
 
 # --- Helper ---
+def serialize_payload(payload):
+    """Ensure all values in payload are JSON serializable (convert timestamps to str)."""
+    clean = {}
+    for k, v in payload.items():
+        if isinstance(v, (pd.Timestamp, datetime, datetime.date)):
+             clean[k] = v.strftime("%Y-%m-%d")
+        else:
+             clean[k] = v
+    return clean
+
 def get_data(api_url):
     try:
         r = requests.get(f"{api_url}/data", timeout=5)
@@ -413,8 +423,9 @@ if app_mode == "📝 Input & Scraping":
                 for _, row in edited.iterrows():
                     if row.get("Pilih", True):
                         payload = row.to_dict()
+                        clean_payload = serialize_payload(payload)
                         try:
-                            requests.post(f"{api_url}/save", json=payload)
+                            requests.post(f"{api_url}/save", json=clean_payload)
                             count += 1
                         except Exception as e:
                              st.error(f"Save failed: {e}")
@@ -470,10 +481,12 @@ if app_mode == "📝 Input & Scraping":
                 for _, row in edited_gap.iterrows():
                     if row.get("Pilih", True):
                         payload = row.to_dict()
+                        clean_payload = serialize_payload(payload)
                         try:
-                            requests.post(f"{api_url}/save", json=payload)
+                            requests.post(f"{api_url}/save", json=clean_payload)
                             count += 1
-                        except: pass
+                        except Exception as e:
+                            st.error(f"Save error: {e}")
                 st.success(f"Saved {count} items.")
 
     # --- 4. MONITOR ---

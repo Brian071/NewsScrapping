@@ -318,7 +318,17 @@ async def search_links(req: SearchLinksRequest):
     try:
         query = f"{req.entity} {req.keywords} {req.date}"
         results = await asyncio.to_thread(search_duckduckgo, query, max_results=10)
-        return results
+
+        # Strict Filtering: Only return results that match the requested date
+        # DDGS usually returns 'date' in ISO format or similar
+        filtered_results = []
+        for r in results:
+            d = r.get("date", "")
+            # Simple check: if the date string starts with our requested YYYY-MM-DD
+            if d and str(d).startswith(req.date):
+                filtered_results.append(r)
+
+        return filtered_results
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
