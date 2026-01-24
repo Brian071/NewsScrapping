@@ -170,6 +170,16 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
         existing_urls = set(df_local["URL"].dropna().values) if not df_local.empty and "URL" in df_local.columns else set()
 
+        # Enhanced Deduplication: Check (Date, Title) signature
+        existing_signatures = set()
+        if not df_local.empty:
+            for _, row in df_local.iterrows():
+                # Normalize title: strip + lower
+                t_sig = str(row.get('Judul', '')).strip().lower()
+                d_sig = str(row.get('Tanggal', '')).strip()
+                if t_sig and d_sig:
+                    existing_signatures.add((d_sig, t_sig))
+
         job_seen_urls = set()
         tasks = []
         sem = asyncio.Semaphore(5)
@@ -193,9 +203,18 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
 
                     t, c, pub_date = await extract_article_content_async(url)
                     if t and c and len(c) > 200:
+                        # Check existing signatures
+                        final_date = pub_date if pub_date else date_str
+                        t_norm = str(t).strip().lower()
+                        d_norm = str(final_date).strip()
+
+                        if (d_norm, t_norm) in existing_signatures:
+                            print(f"Skipping Duplicate (Date+Title): {d_norm} - {t}")
+                            continue
+
                         return {
                             "Pilih": True,
-                            "Tanggal": pub_date if pub_date else date_str,
+                            "Tanggal": final_date,
                             "Entitas": req.entity,
                             "Judul": t,
                             "Isi": c,
@@ -324,8 +343,12 @@ async def search_links(req: SearchLinksRequest):
         filtered_results = []
         for r in results:
             d = r.get("date", "")
-            # Simple check: if the date string starts with our requested YYYY-MM-DD
-            if d and str(d).startswith(req.date):
+            # If date exists, it MUST match
+            if d:
+                if str(d).startswith(req.date):
+                    filtered_results.append(r)
+            else:
+                # If date is missing/unsure, keep it (User: "if you not sure... insert data")
                 filtered_results.append(r)
 
         return filtered_results
