@@ -300,7 +300,7 @@ if app_mode == "📝 Input & Scraping":
 
             # Helper to Scrape from URL
             with st.expander("🌐 Scrape from URL (Auto-Fill)"):
-                st.caption(f"Scraping will fill title/content but keep the date as **{selected_date}**")
+                st.caption("Scraping will fill title/content. Date will be updated if detected in the article.")
                 url_to_scrape = st.text_input("Paste URL here")
                 if st.button("🚀 Scrape URL"):
                      if url_to_scrape:
@@ -326,7 +326,7 @@ if app_mode == "📝 Input & Scraping":
                                          except:
                                              st.warning("Scraped content, but could not parse date.")
                                      else:
-                                         st.success("Scraped! Form updated below.")
+                                         st.warning("⚠️ Date NOT detected in article. Please set date manually!")
                                  else:
                                      st.error(f"Failed: {r.text}")
                              except Exception as e:
