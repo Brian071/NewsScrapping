@@ -223,7 +223,7 @@ if app_mode == "📝 Input & Scraping":
             if today.year == sel_year and today.month == sel_month:
                 default_date = today
 
-            selected_date = st.date_input("Pick a Date", value=default_date)
+            selected_date = st.date_input("Pick a Date", value=default_date, key="input_manual_date")
 
             # Check Status
             date_str = str(selected_date)
@@ -302,7 +302,21 @@ if app_mode == "📝 Input & Scraping":
                                      st.session_state['temp_title'] = scraped_data.get('Judul', '')
                                      st.session_state['temp_content'] = scraped_data.get('Isi', '')
                                      st.session_state['temp_url'] = url_to_scrape
-                                     st.success("Scraped! Form updated below.")
+
+                                     # Update Date if found
+                                     scraped_date_str = scraped_data.get('Tanggal')
+                                     if scraped_date_str:
+                                         try:
+                                             # Assuming backend returns YYYY-MM-DD or standard iso format
+                                             new_date = datetime.strptime(str(scraped_date_str), "%Y-%m-%d").date()
+                                             st.session_state['input_manual_date'] = new_date
+                                             st.success(f"Scraped! Date updated to {new_date}.")
+                                             time.sleep(0.5)
+                                             st.rerun()
+                                         except:
+                                             st.warning("Scraped content, but could not parse date.")
+                                     else:
+                                         st.success("Scraped! Form updated below.")
                                  else:
                                      st.error(f"Failed: {r.text}")
                              except Exception as e:
