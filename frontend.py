@@ -32,22 +32,39 @@ st.sidebar.header("⚙️ Configuration")
 # Default to localhost:8000 as requested
 api_url = st.sidebar.text_input("Backend API URL", value="http://localhost:8000")
 
+# --- Backend Health Check ---
+def check_backend_health(url):
+    try:
+        r = requests.get(f"{url}/health", timeout=2)
+        return r.status_code == 200
+    except:
+        return False
+
+# Perform check immediately
+if not check_backend_health(api_url):
+    st.error(f"❌ Cannot connect to Backend API at `{api_url}`")
+    st.warning("Please ensure the backend server is running.")
+    st.info("If running in Colab/Notebook, make sure the cell executing `api.py` (FastAPI) is active and running.")
+    if st.button("Retry Connection"):
+        st.rerun()
+    st.stop()
+
 # --- Helper ---
 def get_data(api_url):
     try:
-        r = requests.get(f"{api_url}/data")
+        r = requests.get(f"{api_url}/data", timeout=5)
         if r.status_code == 200:
             data = r.json()
             if not data:
                 return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
             return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Failed to fetch data from {api_url}: {e}")
+        st.error(f"Failed to fetch data: {e}")
     return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
 
 def get_logs(api_url):
     try:
-        r = requests.get(f"{api_url}/logs")
+        r = requests.get(f"{api_url}/logs", timeout=5)
         if r.status_code == 200:
             data = r.json()
             return pd.DataFrame(data)
@@ -64,7 +81,7 @@ def job_polling_widget():
         st.info(f"⏳ Background Job Running (ID: {st.session_state.job_id})...")
 
         try:
-            r = requests.get(f"{api_url}/job/{st.session_state.job_id}")
+            r = requests.get(f"{api_url}/job/{st.session_state.job_id}", timeout=3)
             if r.status_code == 200:
                 job_data = r.json()
                 status = job_data.get("status")
@@ -82,7 +99,7 @@ def job_polling_widget():
                 if current_action:
                     st.text(f"Status: {current_action}")
 
-                # Update live results to session state immediately
+                # Update live results to session state
                 if results:
                     df_res = pd.DataFrame(results)
                     if st.session_state.job_type == "batch":
@@ -105,13 +122,14 @@ def job_polling_widget():
                     st.session_state.job_id = None
                     st.session_state.job_type = None
                 else:
-                    # Still running, refresh
-                    time.sleep(2)
+                    # Still running, refresh less frequently to allow multitasking
+                    time.sleep(5)
                     st.rerun()
             else:
-                st.error("Failed to check job status.")
+                st.warning("Job status check failed (Backend busy?)")
         except Exception as e:
-            st.warning(f"Connection issue: {e}")
+            # Don't crash on transient connection errors
+            st.caption(f"Waiting for connection... ({e})")
             time.sleep(5)
             st.rerun()
 
@@ -124,7 +142,7 @@ def render_calendar(year, month, df_data, df_logs, entity):
 
     # Filter data for this month/year/entity
     if not df_data.empty and 'Tanggal' in df_data.columns:
-        df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce')
+        df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', dayfirst=True)
         mask_data = (df_data['Tanggal'].dt.year == year) & \
                     (df_data['Tanggal'].dt.month == month) & \
                     (df_data['Entitas'] == entity)
@@ -135,7 +153,7 @@ def render_calendar(year, month, df_data, df_logs, entity):
     # Filter logs
     skipped_dates = set()
     if not df_logs.empty and 'Tanggal' in df_logs.columns:
-         df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce')
+         df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', dayfirst=True)
          mask_logs = (df_logs['Tanggal'].dt.year == year) & \
                      (df_logs['Tanggal'].dt.month == month) & \
                      (df_logs['Entitas'] == entity)
@@ -272,6 +290,7 @@ if app_mode == "📝 Input & Scraping":
 
             # Helper to Scrape from URL
             with st.expander("🌐 Scrape from URL (Auto-Fill)"):
+                st.caption(f"Scraping will fill title/content but keep the date as **{selected_date}**")
                 url_to_scrape = st.text_input("Paste URL here")
                 if st.button("🚀 Scrape URL"):
                      if url_to_scrape:
@@ -463,7 +482,7 @@ if app_mode == "📝 Input & Scraping":
             # Apply Filters
             if "Tanggal" in df.columns:
                 # Normalize dates
-                df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce')
+                df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', dayfirst=True)
 
                 mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
                 if m_entity != "All":
