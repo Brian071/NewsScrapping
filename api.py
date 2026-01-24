@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import gsheet_handler
+import db_handler
 import pandas as pd
 from datetime import datetime, timedelta
 from duckduckgo_search import DDGS
@@ -31,8 +32,8 @@ except Exception as e:
 
 app = FastAPI()
 
-# --- Global Job Store ---
-JOBS = {}
+# Initialize DB (This will check for Drive/Colab path)
+db_handler.init_db()
 
 # --- Models ---
 class ScrapeRequest(BaseModel):
@@ -154,7 +155,8 @@ def search_duckduckgo(query, max_results=5):
 # --- Async Worker ---
 async def run_scrape_job(job_id: str, req: ScrapeRequest):
     try:
-        JOBS[job_id]["status"] = "running"
+        # SQLite: Update Status
+        db_handler.update_job_status(job_id, "running")
         print(f"Starting Job {job_id} for {req.entity}...")
 
         start_dt = datetime.strptime(req.start_date, "%Y-%m-%d")
@@ -164,8 +166,13 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
             raise ValueError(f"Start date {req.start_date} cannot be after End date {req.end_date}")
 
         delta = (end_dt - start_dt).days + 1
-        JOBS[job_id]["total"] = delta
-        JOBS[job_id]["current_action"] = f"Starting scrape for {req.entity} ({delta} days)"
+
+        # SQLite: Update Total
+        conn = db_handler.get_conn()
+        conn.execute("UPDATE jobs SET total = ?, current_action = ? WHERE job_id = ?",
+                     (delta, f"Starting scrape for {req.entity} ({delta} days)", job_id))
+        conn.commit()
+        conn.close()
 
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
         existing_urls = set(df_local["URL"].dropna().values) if not df_local.empty and "URL" in df_local.columns else set()
@@ -187,7 +194,9 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
         async def process_date(date_obj):
             async with sem:
                 date_str = date_obj.strftime("%Y-%m-%d")
-                JOBS[job_id]["current_action"] = f"Processing {date_str}..."
+
+                # SQLite: Update Action (Progress)
+                db_handler.update_job_progress(job_id, processed=None, action=f"Processing {date_str}...")
 
                 query = f"{req.entity} {req.keywords} {date_str}"
                 results = await asyncio.to_thread(search_duckduckgo, query)
@@ -212,16 +221,9 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                             print(f"Skipping Duplicate (Date+Title): {d_norm} - {t}")
                             continue
 
-                        return {
-                            "Pilih": True,
-                            "Tanggal": final_date,
-                            "Entitas": req.entity,
-                            "Judul": t,
-                            "Isi": c,
-                            "URL": url,
-                            "Judul_Inggris": "",
-                            "Isi_Inggris": ""
-                        }
+                        # SQLite: Save Result Immediately
+                        db_handler.save_result(job_id, final_date, req.entity, t, c, url)
+                        return True
                 return None
 
         for i in range(delta):
@@ -232,17 +234,46 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
         for future in asyncio.as_completed(tasks):
             res = await future
             processed_count += 1
-            JOBS[job_id]["processed"] = processed_count
-            if res:
-                JOBS[job_id]["results"].append(res)
+            # SQLite: Update Processed Count
+            db_handler.update_job_progress(job_id, processed=processed_count)
 
-        JOBS[job_id]["status"] = "completed"
-        print(f"Job {job_id} Completed. Found {len(JOBS[job_id]['results'])} articles.")
+        # --- SYNC TO DRIVE (via Google Sheets) ---
+        db_handler.update_job_status(job_id, "running", "Syncing to Drive...")
+
+        unsynced = db_handler.get_unsynced_results(job_id)
+        if unsynced:
+            sync_data = []
+            ids_to_mark = []
+
+            for r in unsynced:
+                sync_data.append({
+                    "Tanggal": r["date"],
+                    "Entitas": r["entity"],
+                    "Judul": r["title"],
+                    "Isi": r["content"],
+                    "Judul_Inggris": "",
+                    "Isi_Inggris": "",
+                    "URL": r["url"]
+                })
+                ids_to_mark.append(r["id"])
+
+            if sync_data:
+                df_batch = pd.DataFrame(sync_data)
+                try:
+                    gsheet_handler.bulk_append(df_batch)
+                    db_handler.mark_results_synced(ids_to_mark)
+                    print(f"Synced {len(sync_data)} articles to Drive.")
+                except Exception as e:
+                    print(f"Sync failed: {e}")
+                    db_handler.update_job_status(job_id, "failed", f"Scrape done but Sync failed: {e}")
+                    return
+
+        db_handler.update_job_status(job_id, "completed")
+        print(f"Job {job_id} Completed.")
 
     except Exception as e:
         print(f"Job {job_id} Failed: {e}")
-        JOBS[job_id]["status"] = "failed"
-        JOBS[job_id]["msg"] = str(e)
+        db_handler.update_job_status(job_id, "failed", str(e))
 
 # --- Endpoints ---
 
@@ -303,23 +334,24 @@ def log_empty(req: LogEmptyRequest):
 @app.post("/start_scrape")
 async def start_scrape(req: ScrapeRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
-    JOBS[job_id] = {
-        "status": "queued",
-        "results": [],
-        "msg": "",
-        "total": 0,
-        "processed": 0,
-        "created_at": time.time(),
-        "current_action": "Initializing..."
-    }
+
+    # Initialize Job in SQLite
+    db_handler.create_job(job_id, "queued")
+
     background_tasks.add_task(run_scrape_job, job_id, req)
     return {"job_id": job_id}
 
 @app.get("/job/{job_id}")
 def get_job_status(job_id: str):
-    job = JOBS.get(job_id)
+    # Retrieve from SQLite
+    job = db_handler.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Attach results (from local DB) so frontend can display them
+    results = db_handler.get_job_results(job_id)
+    job["results"] = results
+
     return job
 
 @app.post("/scrape_url")
