@@ -153,8 +153,13 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
 
         start_dt = datetime.strptime(req.start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(req.end_date, "%Y-%m-%d")
+
+        if start_dt > end_dt:
+            raise ValueError(f"Start date {req.start_date} cannot be after End date {req.end_date}")
+
         delta = (end_dt - start_dt).days + 1
         JOBS[job_id]["total"] = delta
+        JOBS[job_id]["current_action"] = f"Starting scrape for {req.entity} ({delta} days)"
 
         # Load existing data for deduplication
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
@@ -169,6 +174,7 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
         async def process_date(date_obj):
             async with sem:
                 date_str = date_obj.strftime("%Y-%m-%d")
+                JOBS[job_id]["current_action"] = f"Processing {date_str}..."
 
                 # OPTIONAL: Check if we already have data for this Date+Entity in DB?
                 # The user wants "Gap Filler" so we might want to skip if date exists.
@@ -291,7 +297,8 @@ async def start_scrape(req: ScrapeRequest, background_tasks: BackgroundTasks):
         "msg": "",
         "total": 0,
         "processed": 0,
-        "created_at": time.time()
+        "created_at": time.time(),
+        "current_action": "Initializing..."
     }
     background_tasks.add_task(run_scrape_job, job_id, req)
     return {"job_id": job_id}

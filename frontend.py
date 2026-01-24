@@ -67,13 +67,21 @@ def job_polling_widget():
                 st.write(f"Processed: {processed} / {total}")
 
                 # Preview current results
+                current_action = job_data.get("current_action", "")
+                if current_action:
+                    st.text(f"Status: {current_action}")
+
                 if results:
                     st.write(f"Found {len(results)} articles so far...")
                     # Optional: Show snippet
                     # st.dataframe(pd.DataFrame(results).tail(3))
 
                 if status == "completed":
-                    st.success("Job Completed!")
+                    if not results:
+                        st.warning("Job Completed: No articles found.")
+                    else:
+                        st.success(f"Job Completed! Found {len(results)} articles.")
+
                     df_res = pd.DataFrame(results)
 
                     if st.session_state.job_type == "batch":
@@ -152,21 +160,24 @@ if app_mode == "📝 Input & Scraping":
         kw = st.text_input("Keywords")
         
         if st.button("Start Batch Scrape", disabled=(st.session_state.job_id is not None)):
-            payload = {
-                "start_date": str(start), "end_date": str(end),
-                "entity": entity, "keywords": kw
-            }
-            try:
-                r = requests.post(f"{api_url}/start_scrape", json=payload)
-                if r.status_code == 200:
-                    data = r.json()
-                    st.session_state.job_id = data["job_id"]
-                    st.session_state.job_type = "batch"
-                    st.rerun()
-                else:
-                    st.error(f"Error: {r.text}")
-            except Exception as e:
-                st.error(f"Connection Error at {api_url}: {e}")
+            if start > end:
+                st.error("Error: Start Date must be before or equal to End Date.")
+            else:
+                payload = {
+                    "start_date": str(start), "end_date": str(end),
+                    "entity": entity, "keywords": kw
+                }
+                try:
+                    r = requests.post(f"{api_url}/start_scrape", json=payload)
+                    if r.status_code == 200:
+                        data = r.json()
+                        st.session_state.job_id = data["job_id"]
+                        st.session_state.job_type = "batch"
+                        st.rerun()
+                    else:
+                        st.error(f"Error: {r.text}")
+                except Exception as e:
+                    st.error(f"Connection Error at {api_url}: {e}")
 
         # Display Results from Session State
         if not st.session_state.batch_results.empty:
@@ -205,23 +216,26 @@ if app_mode == "📝 Input & Scraping":
         end_gap = c2.date_input("Range End", key="gap_end")
 
         if st.button("🔍 Scan & Fill Gaps", disabled=(st.session_state.job_id is not None)):
-            payload = {
-                "start_date": str(start_gap),
-                "end_date": str(end_gap),
-                "entity": entity_gap,
-                "keywords": kw_gap
-            }
-            try:
-                r = requests.post(f"{api_url}/start_scrape", json=payload)
-                if r.status_code == 200:
-                    data = r.json()
-                    st.session_state.job_id = data["job_id"]
-                    st.session_state.job_type = "gap"
-                    st.rerun()
-                else:
-                    st.error(f"Error: {r.text}")
-            except Exception as e:
-                st.error(f"Connection Error: {e}")
+            if start_gap > end_gap:
+                st.error("Error: Start Date must be before or equal to End Date.")
+            else:
+                payload = {
+                    "start_date": str(start_gap),
+                    "end_date": str(end_gap),
+                    "entity": entity_gap,
+                    "keywords": kw_gap
+                }
+                try:
+                    r = requests.post(f"{api_url}/start_scrape", json=payload)
+                    if r.status_code == 200:
+                        data = r.json()
+                        st.session_state.job_id = data["job_id"]
+                        st.session_state.job_type = "gap"
+                        st.rerun()
+                    else:
+                        st.error(f"Error: {r.text}")
+                except Exception as e:
+                    st.error(f"Connection Error: {e}")
 
         # Display Results from Session State
         if not st.session_state.gap_results.empty:
