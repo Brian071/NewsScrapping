@@ -1,4 +1,56 @@
-INFO:     Started server process [20020]
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [20020]
+INFO:     Started server process [22131]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'data_berita': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:35164 - "GET /data HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'log_kosong': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:35168 - "GET /logs HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'data_berita': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:38432 - "GET /data HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'log_kosong': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:53640 - "GET /logs HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'data_berita': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:44620 - "GET /data HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'log_kosong': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:44634 - "GET /logs HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'data_berita': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:45402 - "GET /data HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'log_kosong': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:45406 - "GET /logs HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'data_berita': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:33972 - "GET /data HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'log_kosong': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:58312 - "GET /logs HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'data_berita': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:37576 - "GET /data HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'log_kosong': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:37578 - "GET /logs HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'data_berita': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:57732 - "GET /data HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'log_kosong': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:57740 - "GET /logs HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'data_berita': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:45880 - "GET /data HTTP/1.1" 200 OK
+Warning: Could not get default credentials. Error: Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information.
+Error reading sheet 'log_kosong': Authentication failed. Please authenticate with Google first.
+INFO:     127.0.0.1:40528 - "GET /logs HTTP/1.1" 200 OK

@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import time
+import calendar
 import asyncio
 import nest_asyncio
 
@@ -44,6 +45,16 @@ def get_data(api_url):
         st.error(f"Failed to fetch data from {api_url}: {e}")
     return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
 
+def get_logs(api_url):
+    try:
+        r = requests.get(f"{api_url}/logs")
+        if r.status_code == 200:
+            data = r.json()
+            return pd.DataFrame(data)
+    except:
+        pass
+    return pd.DataFrame()
+
 app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
 
 # --- Job Polling Widget ---
@@ -74,7 +85,6 @@ def job_polling_widget():
                 # Update live results to session state immediately
                 if results:
                     df_res = pd.DataFrame(results)
-                    # We check if we have new data to update UI without waiting for completion
                     if st.session_state.job_type == "batch":
                         st.session_state.batch_results = df_res
                     elif st.session_state.job_type == "gap":
@@ -105,6 +115,54 @@ def job_polling_widget():
             time.sleep(5)
             st.rerun()
 
+# --- Calendar Helper ---
+def render_calendar(year, month, df_data, df_logs, entity):
+    cal = calendar.monthcalendar(year, month)
+    month_name = calendar.month_name[month]
+
+    st.write(f"#### 📅 Status: {month_name} {year}")
+
+    # Filter data for this month/year/entity
+    if not df_data.empty and 'Tanggal' in df_data.columns:
+        df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce')
+        mask_data = (df_data['Tanggal'].dt.year == year) & \
+                    (df_data['Tanggal'].dt.month == month) & \
+                    (df_data['Entitas'] == entity)
+        filled_dates = set(df_data[mask_data]['Tanggal'].dt.day.astype(int).tolist())
+    else:
+        filled_dates = set()
+
+    # Filter logs
+    skipped_dates = set()
+    if not df_logs.empty and 'Tanggal' in df_logs.columns:
+         df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce')
+         mask_logs = (df_logs['Tanggal'].dt.year == year) & \
+                     (df_logs['Tanggal'].dt.month == month) & \
+                     (df_logs['Entitas'] == entity)
+         skipped_dates = set(df_logs[mask_logs]['Tanggal'].dt.day.astype(int).tolist())
+
+    # Draw Calendar Grid
+    cols = st.columns(7)
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    for i, d in enumerate(days):
+        cols[i].write(f"**{d}**")
+
+    for week in cal:
+        cols = st.columns(7)
+        for i, day in enumerate(week):
+            if day == 0:
+                cols[i].write(" ")
+            else:
+                status_icon = "⬜" # Default Empty
+                if day in filled_dates:
+                    status_icon = "✅" # Filled
+                elif day in skipped_dates:
+                    status_icon = "🟨" # Skipped
+                else:
+                    status_icon = "🟥" # Empty/Missing
+
+                cols[i].write(f"{day} {status_icon}")
+
 # ==========================================
 # APP A: INPUT & SCRAPING
 # ==========================================
@@ -116,22 +174,141 @@ if app_mode == "📝 Input & Scraping":
     # Global Job Status
     job_polling_widget()
 
-    # --- 1. INPUT MANUAL ---
+    # --- 1. INPUT MANUAL (ENHANCED) ---
     if sub_page == "Input Manual":
         st.subheader("Input Berita Manual")
+
+        # Selectors
+        c_sel1, c_sel2, c_sel3 = st.columns(3)
+        sel_year = c_sel1.number_input("Year", min_value=2000, max_value=2030, value=datetime.now().year)
+        sel_month = c_sel2.selectbox("Month", range(1, 13), index=datetime.now().month - 1)
+        sel_entity = c_sel3.selectbox("Entitas", ["AirAsia", "Garuda Indonesia"])
+
+        # Load Data
+        df = get_data(api_url)
+        logs = get_logs(api_url)
+
+        # Render Calendar
+        try:
+            render_calendar(sel_year, sel_month, df, logs, sel_entity)
+        except Exception as e:
+            st.error(f"Calendar Error: {e}")
+        st.divider()
+
+        # Date Selection
         c1, c2 = st.columns([1, 2])
         with c1:
-            date_input = st.date_input("Tanggal", value=datetime.now())
-            entity_input = st.selectbox("Entitas", ["AirAsia", "Garuda Indonesia"])
+            st.write("### 📆 Select Date to Edit")
+            # Default to today if in range, else 1st of selected month
+            default_date = datetime(sel_year, sel_month, 1)
+            today = datetime.now()
+            if today.year == sel_year and today.month == sel_month:
+                default_date = today
+
+            selected_date = st.date_input("Pick a Date", value=default_date)
+
+            # Check Status
+            date_str = str(selected_date)
+
+            # Check existing data
+            is_filled = False
+            if not df.empty and 'Tanggal' in df.columns:
+                # Re-convert if needed or just string match
+                existing = df[(df['Tanggal'].astype(str).str.startswith(date_str)) & (df['Entitas'] == sel_entity)]
+                is_filled = not existing.empty
+
+            # Check skipped
+            is_skipped = False
+            if not logs.empty and 'Tanggal' in logs.columns:
+                skipped_log = logs[(logs['Tanggal'].astype(str).str.startswith(date_str)) & (logs['Entitas'] == sel_entity)]
+                is_skipped = not skipped_log.empty
+
+            st.write(f"**Status for {date_str}:**")
+            if is_filled:
+                st.success(f"✅ Data Found ({len(existing) if is_filled else 0} articles)")
+            elif is_skipped:
+                st.warning("🟨 Marked as Skipped/No News")
+            else:
+                st.error("🟥 No Data (Empty)")
+
+            # Actions for Empty/Skipped
+            if not is_filled:
+                st.markdown("---")
+                st.write("**Quick Actions:**")
+                if st.button("🚫 Mark as No News / Pass"):
+                    try:
+                        r = requests.post(f"{api_url}/log_empty", json={"date": date_str, "entity": sel_entity, "reason": "Manual Pass"})
+                        if r.status_code == 200:
+                            st.success("Marked as Skipped!")
+                            time.sleep(1)
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
+
+                st.markdown("---")
+                st.write("**Find News Links:**")
+                search_kw = st.text_input("Search Keywords", value="news berita terkini")
+                if st.button("🔎 Search Links"):
+                    with st.spinner("Searching..."):
+                        try:
+                            payload = {"date": date_str, "entity": sel_entity, "keywords": search_kw}
+                            r = requests.post(f"{api_url}/search_links", json=payload)
+                            if r.status_code == 200:
+                                links = r.json()
+                                if links:
+                                    st.write(f"Found {len(links)} links:")
+                                    for l in links:
+                                        link_url = l.get('url')
+                                        link_title = l.get('title')
+                                        st.markdown(f"- [{link_title}]({link_url})")
+                                        st.code(link_url) # Easy copy
+                                else:
+                                    st.info("No links found.")
+                        except Exception as e:
+                            st.error(f"Search Error: {e}")
+
         with c2:
+            st.write("### 📝 Editor / Scraper")
+
+            # Helper to Scrape from URL
+            with st.expander("🌐 Scrape from URL (Auto-Fill)"):
+                url_to_scrape = st.text_input("Paste URL here")
+                if st.button("🚀 Scrape URL"):
+                     if url_to_scrape:
+                         with st.spinner("Scraping..."):
+                             try:
+                                 r = requests.post(f"{api_url}/scrape_url", json={"url": url_to_scrape})
+                                 if r.status_code == 200:
+                                     scraped_data = r.json()
+                                     st.session_state['temp_title'] = scraped_data.get('Judul', '')
+                                     st.session_state['temp_content'] = scraped_data.get('Isi', '')
+                                     st.session_state['temp_url'] = url_to_scrape
+                                     st.success("Scraped! Form updated below.")
+                                 else:
+                                     st.error(f"Failed: {r.text}")
+                             except Exception as e:
+                                 st.error(f"Error: {e}")
+
+            # Form
             with st.form("manual_form"):
-                t = st.text_input("Judul")
-                c = st.text_area("Isi", height=200)
-                u = st.text_input("URL (Optional)")
-                if st.form_submit_button("Simpan"):
+                # Use session state for pre-filling if available
+                default_title = st.session_state.get('temp_title', '')
+                default_content = st.session_state.get('temp_content', '')
+                default_url = st.session_state.get('temp_url', '')
+
+                # Clear temp state after use to avoid sticking
+                if 'temp_title' in st.session_state: del st.session_state['temp_title']
+                if 'temp_content' in st.session_state: del st.session_state['temp_content']
+                if 'temp_url' in st.session_state: del st.session_state['temp_url']
+
+                t = st.text_input("Judul", value=default_title)
+                c = st.text_area("Isi", height=300, value=default_content)
+                u = st.text_input("URL (Optional)", value=default_url)
+
+                if st.form_submit_button("💾 Simpan Data"):
                     payload = {
-                        "Tanggal": str(date_input),
-                        "Entitas": entity_input,
+                        "Tanggal": str(selected_date),
+                        "Entitas": sel_entity,
                         "Judul": t,
                         "Isi": c,
                         "URL": u,
@@ -142,10 +319,20 @@ if app_mode == "📝 Input & Scraping":
                         r = requests.post(f"{api_url}/save", json=payload)
                         if r.status_code == 200:
                             st.success("Tersimpan!")
+                            time.sleep(1)
+                            st.rerun()
                         else:
                             st.error(r.text)
                     except Exception as e:
                         st.error(f"Backend Error at {api_url}: {e}")
+
+            # Show existing data for this date below form
+            if is_filled:
+                st.write("---")
+                st.write("#### Existing Data for this Date:")
+                if not existing.empty:
+                     st.dataframe(existing[["Judul", "URL"]])
+
 
     # --- 2. BATCH SCRAPE ---
     elif sub_page == "Batch Scrape (Auto)":

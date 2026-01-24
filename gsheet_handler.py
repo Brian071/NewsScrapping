@@ -179,6 +179,15 @@ def bulk_append(df_batch, sheet_id=DEFAULT_SPREADSHEET_ID):
 # --- Log Specific Functions ---
 
 def log_empty_date(date, entity, reason="Manual Pass", sheet_id=DEFAULT_SPREADSHEET_ID):
+    # Check for duplicates first
+    df = read_sheet_to_df(sheet_id, "log_kosong")
+    if not df.empty:
+        # Check if Date + Entity already exists
+        exists = df[(df['Tanggal'] == str(date)) & (df['Entitas'] == str(entity))]
+        if not exists.empty:
+            print(f"Log for {date} {entity} already exists. Skipping duplicate log.")
+            return True
+
     row_data = {
         "Tanggal": str(date),
         "Entitas": str(entity),

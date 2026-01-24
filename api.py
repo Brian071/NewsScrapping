@@ -32,7 +32,6 @@ except Exception as e:
 app = FastAPI()
 
 # --- Global Job Store ---
-# Format: { job_id: { "status": "running"|"completed"|"failed", "results": [], "msg": "", "total": 0, "processed": 0 } }
 JOBS = {}
 
 # --- Models ---
@@ -70,6 +69,14 @@ class LogEmptyRequest(BaseModel):
 
 class TranslateRequest(BaseModel):
     rows: List[ArticleData]
+
+class UrlScrapeRequest(BaseModel):
+    url: str
+
+class SearchLinksRequest(BaseModel):
+    date: str
+    entity: str
+    keywords: str = ""
 
 # --- Resources (Lazy Loading) ---
 _translator = None
@@ -111,7 +118,6 @@ def smart_translate(text):
 async def extract_article_content_async(url):
     if not url: return None, None, None
     try:
-        # Minimal config safe for Colab
         browser_cfg = BrowserConfig(
             headless=True,
             verbose=True
@@ -161,25 +167,17 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
         JOBS[job_id]["total"] = delta
         JOBS[job_id]["current_action"] = f"Starting scrape for {req.entity} ({delta} days)"
 
-        # Load existing data for deduplication
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
         existing_urls = set(df_local["URL"].dropna().values) if not df_local.empty and "URL" in df_local.columns else set()
 
-        # Track URLs seen in THIS job to prevent duplicates within results
         job_seen_urls = set()
-
         tasks = []
-        sem = asyncio.Semaphore(5) # Limit concurrency
+        sem = asyncio.Semaphore(5)
 
         async def process_date(date_obj):
             async with sem:
                 date_str = date_obj.strftime("%Y-%m-%d")
                 JOBS[job_id]["current_action"] = f"Processing {date_str}..."
-
-                # OPTIONAL: Check if we already have data for this Date+Entity in DB?
-                # The user wants "Gap Filler" so we might want to skip if date exists.
-                # However, "Batch Scrape" might want to add more.
-                # For now, we rely on URL uniqueness.
 
                 query = f"{req.entity} {req.keywords} {date_str}"
                 results = await asyncio.to_thread(search_duckduckgo, query)
@@ -188,13 +186,9 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                     url = res.get('url')
                     if not url: continue
 
-                    # Deduplication Checks
-                    if url in existing_urls:
-                        continue
-                    if url in job_seen_urls:
-                        continue
+                    if url in existing_urls: continue
+                    if url in job_seen_urls: continue
 
-                    # Mark seen immediately (optimistic)
                     job_seen_urls.add(url)
 
                     t, c, pub_date = await extract_article_content_async(url)
@@ -215,7 +209,6 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
             date_obj = start_dt + timedelta(days=i)
             tasks.append(process_date(date_obj))
 
-        # Process as they complete
         processed_count = 0
         for future in asyncio.as_completed(tasks):
             res = await future
@@ -310,9 +303,24 @@ def get_job_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
-@app.post("/scrape")
-def scrape_deprecated():
-    raise HTTPException(status_code=400, detail="Use /start_scrape for background jobs.")
+@app.post("/scrape_url")
+async def scrape_url(req: UrlScrapeRequest):
+    try:
+        t, c, pub_date = await extract_article_content_async(req.url)
+        if t == "Error":
+             raise HTTPException(status_code=500, detail=c)
+        return {"Judul": t, "Isi": c, "Tanggal": pub_date}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/search_links")
+async def search_links(req: SearchLinksRequest):
+    try:
+        query = f"{req.entity} {req.keywords} {req.date}"
+        results = await asyncio.to_thread(search_duckduckgo, query, max_results=10)
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/translate")
 async def translate_batch(req: TranslateRequest):
