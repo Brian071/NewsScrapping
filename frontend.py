@@ -71,23 +71,20 @@ def job_polling_widget():
                 if current_action:
                     st.text(f"Status: {current_action}")
 
+                # Update live results to session state immediately
                 if results:
-                    st.write(f"Found {len(results)} articles so far...")
-                    # Optional: Show snippet
-                    # st.dataframe(pd.DataFrame(results).tail(3))
+                    df_res = pd.DataFrame(results)
+                    # We check if we have new data to update UI without waiting for completion
+                    if st.session_state.job_type == "batch":
+                        st.session_state.batch_results = df_res
+                    elif st.session_state.job_type == "gap":
+                        st.session_state.gap_results = df_res
 
                 if status == "completed":
                     if not results:
                         st.warning("Job Completed: No articles found.")
                     else:
                         st.success(f"Job Completed! Found {len(results)} articles.")
-
-                    df_res = pd.DataFrame(results)
-
-                    if st.session_state.job_type == "batch":
-                        st.session_state.batch_results = df_res
-                    elif st.session_state.job_type == "gap":
-                        st.session_state.gap_results = df_res
 
                     st.session_state.job_id = None
                     st.session_state.job_type = None
