@@ -53,8 +53,15 @@ if not check_backend_health(api_url):
 def serialize_payload(payload):
     """Ensure all values in payload are JSON serializable (convert timestamps to str)."""
     clean = {}
+    # Use explicit types from datetime module, assuming standard import usage
+    # Since 'from datetime import datetime' is used, 'datetime' refers to the class, not module
+    # 'datetime.date' would fail if 'datetime' is the class.
+    # Safe approach: check attributes or string conversion
     for k, v in payload.items():
-        if isinstance(v, (pd.Timestamp, datetime, datetime.date)):
+        if isinstance(v, (pd.Timestamp, datetime)):
+             clean[k] = v.strftime("%Y-%m-%d")
+        # Check if it's a date object (duck typing or explicit check if module imported)
+        elif hasattr(v, 'strftime'):
              clean[k] = v.strftime("%Y-%m-%d")
         else:
              clean[k] = v

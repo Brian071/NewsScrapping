@@ -182,27 +182,49 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                 query = f"{req.entity} {req.keywords} {date_str}"
                 results = await asyncio.to_thread(search_duckduckgo, query)
 
+                found_any = False
+
+                # Filter duplicates aggressively before scraping
+                valid_results = []
                 for res in results:
                     url = res.get('url')
                     if not url: continue
-
                     if url in existing_urls: continue
                     if url in job_seen_urls: continue
+                    valid_results.append(res)
 
+                for res in valid_results:
+                    url = res.get('url')
                     job_seen_urls.add(url)
 
                     t, c, pub_date = await extract_article_content_async(url)
-                    if t and c and len(c) > 200:
+                    # Relaxed validation: Just need title and some content
+                    if t and t != "Error":
+                        found_any = True
                         return {
                             "Pilih": True,
                             "Tanggal": pub_date if pub_date else date_str,
                             "Entitas": req.entity,
                             "Judul": t,
-                            "Isi": c,
+                            "Isi": c if c else "",
                             "URL": url,
                             "Judul_Inggris": "",
                             "Isi_Inggris": ""
                         }
+
+                # If no articles found, return placeholder if desired?
+                # User said: "bahkan kalau kamu gagal scrape tanggalnya saja boleh di masukkan"
+                if not found_any:
+                    return {
+                        "Pilih": False, # Don't auto-select for save
+                        "Tanggal": date_str,
+                        "Entitas": req.entity,
+                        "Judul": "No Data Found",
+                        "Isi": "",
+                        "URL": "",
+                        "Judul_Inggris": "",
+                        "Isi_Inggris": ""
+                    }
                 return None
 
         for i in range(delta):

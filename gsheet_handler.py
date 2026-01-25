@@ -90,7 +90,12 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
     row_values = []
     for h in headers:
         val = row_data.get(h, "")
-        row_values.append(str(val))
+        s_val = str(val)
+        # TRUNCATE: Google Sheets has a 50,000 char limit per cell.
+        # We truncate to 45,000 to be safe with encoding overhead.
+        if len(s_val) > 45000:
+            s_val = s_val[:45000] + "... (TRUNCATED)"
+        row_values.append(s_val)
         
     try:
         ws.append_row(row_values)
@@ -130,12 +135,15 @@ def update_row_in_sheet(date, entity, old_title, new_data_dict, sheet_id=DEFAULT
     for key, value in new_data_dict.items():
         if key in headers:
             col_idx = headers.index(key) + 1
+            s_val = str(value)
+            if len(s_val) > 45000:
+                s_val = s_val[:45000] + "... (TRUNCATED)"
             try:
-                ws.update_cell(row_idx, col_idx, str(value))
+                ws.update_cell(row_idx, col_idx, s_val)
             except Exception as e:
                 if "Quota exceeded" in str(e):
                     time.sleep(2)
-                    ws.update_cell(row_idx, col_idx, str(value))
+                    ws.update_cell(row_idx, col_idx, s_val)
                 else:
                     raise e
     return True
@@ -163,7 +171,10 @@ def bulk_append(df_batch, sheet_id=DEFAULT_SPREADSHEET_ID):
         row_vals = []
         for h in headers:
             val = row.get(h, "")
-            row_vals.append(str(val))
+            s_val = str(val)
+            if len(s_val) > 45000:
+                s_val = s_val[:45000] + "... (TRUNCATED)"
+            row_vals.append(s_val)
         rows_to_append.append(row_vals)
         
     if rows_to_append:
