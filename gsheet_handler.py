@@ -3,6 +3,7 @@ import pandas as pd
 from google.auth import default
 import time
 from gspread.utils import rowcol_to_a1
+import math
 
 # Default Spreadsheet ID provided by user
 DEFAULT_SPREADSHEET_ID = "1U8xeumDGJckZsTqIMyNr0DBfg0Bv9_IRpDV6XdN59Hw"
@@ -79,6 +80,49 @@ def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berit
         print(f"Error reading sheet '{worksheet_name}': {e}")
         return pd.DataFrame()
 
+def split_text(text, limit=45000):
+    """Splits text into chunks of `limit` characters."""
+    if not text:
+        return [""]
+    return [text[i:i+limit] for i in range(0, len(text), limit)]
+
+def prepare_rows_with_splitting(row_data, headers):
+    """
+    Prepares a list of rows to append, handling text splitting for 'Isi'.
+    Returns a list of lists (rows).
+    """
+    # Identify content to split
+    content = str(row_data.get("Isi", ""))
+    chunks = split_text(content, limit=45000)
+
+    base_title = str(row_data.get("Judul", ""))
+    base_rows = []
+
+    for i, chunk in enumerate(chunks):
+        row_values = []
+        is_continuation = (i > 0)
+
+        for h in headers:
+            val = ""
+            if h == "Isi":
+                val = chunk
+            elif h == "Judul":
+                val = base_title + (f" [Part {i+1}]" if is_continuation else "")
+            elif h == "URL":
+                 # Keep URL for all parts to allow dedup (though technically dup)
+                 # Or maybe empty for parts? If empty, duplicate check might fail if it relies on URL.
+                 # api.py checks existing_urls. If we add URL here, next run will see it.
+                 # It's better to keep it.
+                 val = row_data.get(h, "")
+            else:
+                # Repeat other metadata (Tanggal, Entitas, etc.) for context
+                val = row_data.get(h, "")
+
+            row_values.append(str(val))
+        base_rows.append(row_values)
+
+    return base_rows
+
 def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita"):
     ws = get_worksheet(sheet_id, worksheet_name)
     headers = ws.row_values(1)
@@ -87,23 +131,17 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
         headers = list(row_data.keys())
         ws.append_row(headers)
     
-    row_values = []
-    for h in headers:
-        val = row_data.get(h, "")
-        s_val = str(val)
-        # TRUNCATE: Google Sheets has a 50,000 char limit per cell.
-        # We truncate to 45,000 to be safe with encoding overhead.
-        if len(s_val) > 45000:
-            s_val = s_val[:45000] + "... (TRUNCATED)"
-        row_values.append(s_val)
+    # Use splitting logic
+    rows_to_append = prepare_rows_with_splitting(row_data, headers)
         
     try:
-        ws.append_row(row_values)
+        # Use append_rows (plural) even for single entry split into parts
+        ws.append_rows(rows_to_append)
         return True
     except Exception as e:
         if "Quota exceeded" in str(e):
             time.sleep(2)
-            ws.append_row(row_values)
+            ws.append_rows(rows_to_append)
             return True
         raise e
 
@@ -136,8 +174,9 @@ def update_row_in_sheet(date, entity, old_title, new_data_dict, sheet_id=DEFAULT
         if key in headers:
             col_idx = headers.index(key) + 1
             s_val = str(value)
+            # For updates, we still TRUNCATE because we can't easily insert rows
             if len(s_val) > 45000:
-                s_val = s_val[:45000] + "... (TRUNCATED)"
+                s_val = s_val[:45000] + "... (TRUNCATED - UPDATE LIMIT)"
             try:
                 ws.update_cell(row_idx, col_idx, s_val)
             except Exception as e:
@@ -166,24 +205,22 @@ def bulk_append(df_batch, sheet_id=DEFAULT_SPREADSHEET_ID):
         headers = df_batch.columns.tolist()
         ws.append_row(headers)
     
-    rows_to_append = []
+    all_rows_to_append = []
+
     for _, row in df_batch.iterrows():
-        row_vals = []
-        for h in headers:
-            val = row.get(h, "")
-            s_val = str(val)
-            if len(s_val) > 45000:
-                s_val = s_val[:45000] + "... (TRUNCATED)"
-            row_vals.append(s_val)
-        rows_to_append.append(row_vals)
+        # Convert row to dict for processing
+        row_dict = row.to_dict()
+        # Get split rows (list of lists)
+        split_rows = prepare_rows_with_splitting(row_dict, headers)
+        all_rows_to_append.extend(split_rows)
         
-    if rows_to_append:
+    if all_rows_to_append:
         try:
-            ws.append_rows(rows_to_append)
+            ws.append_rows(all_rows_to_append)
         except Exception as e:
             if "Quota exceeded" in str(e):
                 time.sleep(5)
-                ws.append_rows(rows_to_append)
+                ws.append_rows(all_rows_to_append)
             else:
                 raise e
 
