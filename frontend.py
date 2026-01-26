@@ -91,7 +91,7 @@ def job_polling_widget():
         st.info(f"⏳ Background Job Running (ID: {st.session_state.job_id})...")
 
         try:
-            r = requests.get(f"{api_url}/job/{st.session_state.job_id}", timeout=3)
+            r = requests.get(f"{api_url}/job/{st.session_state.job_id}", timeout=10)
             if r.status_code == 200:
                 job_data = r.json()
                 status = job_data.get("status")
@@ -484,6 +484,16 @@ if app_mode == "📝 Input & Scraping":
                 for _, row in df_existing.iterrows():
                      d_sig = str(row.get('Tanggal', '')).strip()
                      t_sig = str(row.get('Judul', '')).strip().lower()
+
+                     # Normalize date
+                     try:
+                         if d_sig:
+                             dt = pd.to_datetime(d_sig, dayfirst=True)
+                             if not pd.isna(dt):
+                                 d_sig = dt.strftime("%Y-%m-%d")
+                     except:
+                         pass
+
                      if d_sig and t_sig:
                          existing_sigs.add((d_sig, t_sig))
 
@@ -516,6 +526,16 @@ if app_mode == "📝 Input & Scraping":
             for _, row in df_gap.iterrows():
                 url = str(row.get('url', ''))
                 d = str(row.get('date', '')).strip()
+
+                # Normalize date
+                try:
+                    if d:
+                        dt = pd.to_datetime(d, dayfirst=True)
+                        if not pd.isna(dt):
+                            d = dt.strftime("%Y-%m-%d")
+                except:
+                    pass
+
                 t = str(row.get('title', '')).strip().lower()
 
                 if url in existing_urls:

@@ -145,7 +145,7 @@ async def extract_article_content_async(url):
             
             article = Article(url)
             article.set_html(result.html)
-            article.parse()
+            await asyncio.to_thread(article.parse)
             
             pub_date = article.publish_date
             pub_date_str = None
@@ -219,7 +219,15 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
             for _, row in df_local.iterrows():
                 # Normalize title: strip + lower
                 t_sig = str(row.get('Judul', '')).strip().lower()
-                d_sig = str(row.get('Tanggal', '')).strip()
+                d_sig_raw = str(row.get('Tanggal', '')).strip()
+                d_sig = d_sig_raw
+                try:
+                    # Normalize date to YYYY-MM-DD
+                    d_parsed = date_parser.parse(d_sig_raw)
+                    d_sig = d_parsed.strftime("%Y-%m-%d")
+                except:
+                    pass
+
                 if t_sig and d_sig:
                     existing_signatures.add((d_sig, t_sig))
 
@@ -249,7 +257,7 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                     t, c, pub_date = await extract_article_content_async(url)
                     if t and c and len(c) > 200:
                         # Check existing signatures
-                        final_date = pub_date if pub_date else date_str
+                        final_date = pub_date if pub_date else ""
                         t_norm = str(t).strip().lower()
                         d_norm = str(final_date).strip()
 
