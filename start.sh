@@ -15,8 +15,8 @@ uvicorn api:app --host 0.0.0.0 --port 8000 --loop asyncio > api.log 2>&1 &
 BACKEND_PID=$!
 
 echo "Waiting for Backend to respond at http://localhost:8000..."
-# Wait up to 30 seconds
-for i in {1..30}; do
+# Wait up to 60 seconds
+for i in {1..60}; do
     if curl -s http://localhost:8000/health > /dev/null; then
         echo "✅ Backend is UP!"
         break

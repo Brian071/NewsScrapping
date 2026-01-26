@@ -11,9 +11,6 @@ from datetime import datetime, timedelta
 from duckduckgo_search import DDGS
 from newspaper import Article
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
-import torch
-from transformers import pipeline
-from llama_index.core.node_parser import SentenceSplitter
 import os
 import gc
 
@@ -86,6 +83,8 @@ def get_translator():
     global _translator
     if _translator is None:
         print("Loading NLLB-200 model (Lazy Load)...")
+        import torch
+        from transformers import pipeline
         device = 0 if torch.cuda.is_available() else -1
         _translator = pipeline("translation", model="facebook/nllb-200-distilled-600M", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
     return _translator
@@ -94,6 +93,7 @@ def get_splitter():
     global _splitter
     if _splitter is None:
         print("Loading SentenceSplitter (Lazy Load)...")
+        from llama_index.core.node_parser import SentenceSplitter
         _splitter = SentenceSplitter(chunk_size=64, chunk_overlap=0)
     return _splitter
 
@@ -172,7 +172,10 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
         JOBS[job_id]["current_action"] = f"Starting scrape for {req.entity} ({delta} days)"
 
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
-        existing_urls = set(df_local["URL"].dropna().values) if not df_local.empty and "URL" in df_local.columns else set()
+        existing_urls = set()
+        if not df_local.empty and "URL" in df_local.columns:
+            # Normalize URLs in existing data (strip whitespace)
+            existing_urls = set(str(u).strip() for u in df_local["URL"].values if str(u).strip())
 
         job_seen_urls = set()
         tasks = []
@@ -194,13 +197,15 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                 for res in results:
                     url = res.get('url')
                     if not url: continue
-                    if url in existing_urls: continue
-                    if url in job_seen_urls: continue
+                    url_clean = str(url).strip()
+                    if url_clean in existing_urls: continue
+                    if url_clean in job_seen_urls: continue
                     valid_results.append(res)
 
                 for res in valid_results:
                     url = res.get('url')
-                    job_seen_urls.add(url)
+                    url_clean = str(url).strip()
+                    job_seen_urls.add(url_clean)
 
                     t, c, pub_date = await extract_article_content_async(url)
 
@@ -209,7 +214,8 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                         found_any = True
                         return {
                             "Pilih": True,
-                            "Tanggal": pub_date if pub_date else date_str,
+                            # FIX: If pub_date is None, return empty string, NOT date_str
+                            "Tanggal": pub_date if pub_date else "",
                             "Entitas": req.entity,
                             "Judul": t,
                             "Isi": c if c else "",
@@ -220,6 +226,13 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
 
                 # If no articles found, return placeholder if desired?
                 # User said: "bahkan kalau kamu gagal scrape tanggalnya saja boleh di masukkan"
+                # But recent instruction says: "The user strictly require the Date field to be empty if extraction fails"
+                # Wait, the fallback here was returning "No Data Found".
+                # If no articles found at all, we probably shouldn't return a row unless we want to indicate "checked".
+                # The existing code returned a row with "No Data Found" and "Pilih: False".
+                # I will keep this behavior but ensure the date logic follows requirements if we were to return a real article.
+                # For "No Data Found", we are returning date_str so the user knows WHICH date had no data. This is likely fine as it's not a "failed extraction" but "no results".
+
                 if not found_any:
                     return {
                         "Pilih": False, # Don't auto-select for save
