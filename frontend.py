@@ -1,18 +1,30 @@
 import streamlit as st
 import pandas as pd
-import requests
 from datetime import datetime, timedelta
 import time
 import calendar
 import asyncio
 import nest_asyncio
+import uuid
+
+# Local Modules
+import db_handler
+import gsheet_handler
+import translator_utils
 
 # Force default loop policy for Colab stability
-asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+try:
+    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+except Exception:
+    pass
+
 try:
     nest_asyncio.apply()
-except:
+except Exception:
     pass
+
+# Initialize DB on Startup
+db_handler.init_db()
 
 st.set_page_config(page_title="Auto AI News System", page_icon="🤖", layout="wide")
 
@@ -21,35 +33,23 @@ if 'batch_results' not in st.session_state:
     st.session_state.batch_results = pd.DataFrame()
 if 'gap_results' not in st.session_state:
     st.session_state.gap_results = pd.DataFrame()
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = []
+if 'scrape_url_result' not in st.session_state:
+    st.session_state.scrape_url_result = None
+
 if 'job_id' not in st.session_state:
     st.session_state.job_id = None
-if 'job_type' not in st.session_state: # 'batch' or 'gap'
+if 'job_type' not in st.session_state:
+    # 'batch', 'gap', 'search_links', 'scrape_url'
     st.session_state.job_type = None
 
 # --- Sidebar Config ---
 st.sidebar.title("🤖 Auto AI System")
 st.sidebar.header("⚙️ Configuration")
-# Default to localhost:8000 as requested
-api_url = st.sidebar.text_input("Backend API URL", value="http://localhost:8000")
+st.sidebar.info("Running in Database Mode (Worker Driven)")
 
-# --- Backend Health Check ---
-def check_backend_health(url):
-    try:
-        r = requests.get(f"{url}/health", timeout=2)
-        return r.status_code == 200
-    except:
-        return False
-
-# Perform check immediately
-if not check_backend_health(api_url):
-    st.error(f"❌ Cannot connect to Backend API at `{api_url}`")
-    st.warning("Please ensure the backend server is running.")
-    st.info("If running in Colab/Notebook, make sure the cell executing `api.py` (FastAPI) is active and running.")
-    if st.button("Retry Connection"):
-        st.rerun()
-    st.stop()
-
-# --- Helper ---
+# --- Helper Functions ---
 def serialize_payload(payload):
     """Ensure all values in payload are JSON serializable (convert timestamps to str)."""
     clean = {}
@@ -60,29 +60,22 @@ def serialize_payload(payload):
              clean[k] = v
     return clean
 
-def get_data(api_url):
+def get_data():
     try:
-        r = requests.get(f"{api_url}/data", timeout=5)
-        if r.status_code == 200:
-            data = r.json()
-            if not data:
-                return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
-            return pd.DataFrame(data)
+        df = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
+        if df.empty:
+             return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
+        return df
     except Exception as e:
         st.error(f"Failed to fetch data: {e}")
-    return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
+        return pd.DataFrame(columns=["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
 
-def get_logs(api_url):
+def get_logs():
     try:
-        r = requests.get(f"{api_url}/logs", timeout=5)
-        if r.status_code == 200:
-            data = r.json()
-            return pd.DataFrame(data)
+        return gsheet_handler.get_empty_logs()
     except:
         pass
     return pd.DataFrame()
-
-app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
 
 # --- Job Polling Widget ---
 def job_polling_widget():
@@ -91,105 +84,69 @@ def job_polling_widget():
         st.info(f"⏳ Background Job Running (ID: {st.session_state.job_id})...")
 
         try:
-            r = requests.get(f"{api_url}/job/{st.session_state.job_id}", timeout=10)
-            if r.status_code == 200:
-                job_data = r.json()
-                status = job_data.get("status")
-                processed = job_data.get("processed", 0)
-                total = job_data.get("total", 1)
-                results = job_data.get("results", [])
+            # Poll DB directly
+            job = db_handler.get_job(st.session_state.job_id)
+            if job:
+                status = job.get("status")
+                processed = job.get("processed", 0)
+                total = job.get("total", 1)
+
+                # Fetch results if any
+                results = db_handler.get_job_results(st.session_state.job_id)
 
                 # Progress Bar
-                progress = min(1.0, max(0.0, processed / total)) if total > 0 else 0
-                st.progress(progress)
+                if total > 0:
+                     progress = min(1.0, max(0.0, processed / total))
+                     st.progress(progress)
                 st.write(f"Processed: {processed} / {total}")
 
-                # Preview current results
-                current_action = job_data.get("current_action", "")
+                current_action = job.get("current_action", "")
                 if current_action:
                     st.text(f"Status: {current_action}")
 
-                # Update live results to session state
-                if results:
-                    df_res = pd.DataFrame(results)
-                    if st.session_state.job_type == "batch":
-                        st.session_state.batch_results = df_res
-                    elif st.session_state.job_type == "gap":
-                        st.session_state.gap_results = df_res
-
                 if status == "completed":
-                    if not results:
-                        st.warning("Job Completed: No articles found.")
-                    else:
+                    # Distribute results based on job type
+                    if st.session_state.job_type == "batch":
+                        st.session_state.batch_results = pd.DataFrame(results)
                         st.success(f"Job Completed! Found {len(results)} articles.")
+
+                    elif st.session_state.job_type == "gap":
+                        st.session_state.gap_results = pd.DataFrame(results)
+                        st.success(f"Job Completed! Found {len(results)} articles.")
+
+                    elif st.session_state.job_type == "search_links":
+                        # Convert results to list of dicts for display
+                        st.session_state.search_results = results
+                        st.success(f"Search Completed! Found {len(results)} links.")
+
+                    elif st.session_state.job_type == "scrape_url":
+                        if results:
+                            st.session_state.scrape_url_result = results[0]
+                            st.success("URL Scraped successfully!")
+                        else:
+                            st.error("URL Scraped but no result returned?")
 
                     st.session_state.job_id = None
                     st.session_state.job_type = None
                     time.sleep(1)
                     st.rerun()
+
                 elif status == "failed":
-                    st.error(f"Job Failed: {job_data.get('msg')}")
+                    st.error(f"Job Failed: {job.get('msg')}")
                     st.session_state.job_id = None
                     st.session_state.job_type = None
                 else:
-                    # Still running, refresh less frequently to allow multitasking
-                    time.sleep(5)
+                    time.sleep(2)
                     st.rerun()
             else:
-                st.warning("Job status check failed (Backend busy?)")
+                st.warning("Job not found in DB...")
+                time.sleep(2)
         except Exception as e:
-            # Don't crash on transient connection errors
-            st.caption(f"Waiting for connection... ({e})")
-            time.sleep(5)
-            st.rerun()
+             st.error(f"Polling Error: {e}")
+             time.sleep(5)
+             st.rerun()
 
-# --- Calendar Helper ---
-def render_calendar(year, month, df_data, df_logs, entity):
-    cal = calendar.monthcalendar(year, month)
-    month_name = calendar.month_name[month]
-
-    st.write(f"#### 📅 Status: {month_name} {year}")
-
-    # Filter data for this month/year/entity
-    if not df_data.empty and 'Tanggal' in df_data.columns:
-        df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', dayfirst=True)
-        mask_data = (df_data['Tanggal'].dt.year == year) & \
-                    (df_data['Tanggal'].dt.month == month) & \
-                    (df_data['Entitas'] == entity)
-        filled_dates = set(df_data[mask_data]['Tanggal'].dt.day.astype(int).tolist())
-    else:
-        filled_dates = set()
-
-    # Filter logs
-    skipped_dates = set()
-    if not df_logs.empty and 'Tanggal' in df_logs.columns:
-         df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', dayfirst=True)
-         mask_logs = (df_logs['Tanggal'].dt.year == year) & \
-                     (df_logs['Tanggal'].dt.month == month) & \
-                     (df_logs['Entitas'] == entity)
-         skipped_dates = set(df_logs[mask_logs]['Tanggal'].dt.day.astype(int).tolist())
-
-    # Draw Calendar Grid
-    cols = st.columns(7)
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    for i, d in enumerate(days):
-        cols[i].write(f"**{d}**")
-
-    for week in cal:
-        cols = st.columns(7)
-        for i, day in enumerate(week):
-            if day == 0:
-                cols[i].write(" ")
-            else:
-                status_icon = "⬜" # Default Empty
-                if day in filled_dates:
-                    status_icon = "✅" # Filled
-                elif day in skipped_dates:
-                    status_icon = "🟨" # Skipped
-                else:
-                    status_icon = "🟥" # Empty/Missing
-
-                cols[i].write(f"{day} {status_icon}")
+app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
 
 # ==========================================
 # APP A: INPUT & SCRAPING
@@ -202,21 +159,57 @@ if app_mode == "📝 Input & Scraping":
     # Global Job Status
     job_polling_widget()
 
-    # --- 1. INPUT MANUAL (ENHANCED) ---
+    # --- 1. INPUT MANUAL ---
     if sub_page == "Input Manual":
         st.subheader("Input Berita Manual")
 
-        # Selectors
         c_sel1, c_sel2, c_sel3 = st.columns(3)
         sel_year = c_sel1.number_input("Year", min_value=2000, max_value=2030, value=datetime.now().year)
         sel_month = c_sel2.selectbox("Month", range(1, 13), index=datetime.now().month - 1)
         sel_entity = c_sel3.selectbox("Entitas", ["AirAsia", "Garuda Indonesia"])
 
-        # Load Data
-        df = get_data(api_url)
-        logs = get_logs(api_url)
+        df = get_data()
+        logs = get_logs()
 
         # Render Calendar
+        def render_calendar(year, month, df_data, df_logs, entity):
+            cal = calendar.monthcalendar(year, month)
+            month_name = calendar.month_name[month]
+            st.write(f"#### 📅 Status: {month_name} {year}")
+
+            if not df_data.empty and 'Tanggal' in df_data.columns:
+                df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', dayfirst=True)
+                mask_data = (df_data['Tanggal'].dt.year == year) & \
+                            (df_data['Tanggal'].dt.month == month) & \
+                            (df_data['Entitas'] == entity)
+                filled_dates = set(df_data[mask_data]['Tanggal'].dt.day.astype(int).tolist())
+            else:
+                filled_dates = set()
+
+            if not df_logs.empty and 'Tanggal' in df_logs.columns:
+                 df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', dayfirst=True)
+                 mask_logs = (df_logs['Tanggal'].dt.year == year) & \
+                             (df_logs['Tanggal'].dt.month == month) & \
+                             (df_logs['Entitas'] == entity)
+                 skipped_dates = set(df_logs[mask_logs]['Tanggal'].dt.day.astype(int).tolist())
+
+            cols = st.columns(7)
+            days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            for i, d in enumerate(days):
+                cols[i].write(f"**{d}**")
+
+            for week in cal:
+                cols = st.columns(7)
+                for i, day in enumerate(week):
+                    if day == 0:
+                        cols[i].write(" ")
+                    else:
+                        status_icon = "⬜"
+                        if day in filled_dates: status_icon = "✅"
+                        elif day in skipped_dates: status_icon = "🟨"
+                        else: status_icon = "🟥"
+                        cols[i].write(f"{day} {status_icon}")
+
         try:
             render_calendar(sel_year, sel_month, df, logs, sel_entity)
         except Exception as e:
@@ -227,119 +220,127 @@ if app_mode == "📝 Input & Scraping":
         c1, c2 = st.columns([1, 2])
         with c1:
             st.write("### 📆 Select Date to Edit")
-            # Default to today if in range, else 1st of selected month
             default_date = datetime(sel_year, sel_month, 1)
             today = datetime.now()
             if today.year == sel_year and today.month == sel_month:
                 default_date = today
 
             selected_date = st.date_input("Pick a Date", value=default_date, key="input_manual_date")
-
-            # Check Status
             date_str = str(selected_date)
 
-            # Check existing data
+            # Check Status
             is_filled = False
+            existing = pd.DataFrame()
             if not df.empty and 'Tanggal' in df.columns:
-                # Re-convert if needed or just string match
-                existing = df[(df['Tanggal'].astype(str).str.startswith(date_str)) & (df['Entitas'] == sel_entity)]
-                is_filled = not existing.empty
+                 # Ensure string matching works
+                 df['Tanggal_Str'] = df['Tanggal'].astype(str)
+                 existing = df[(df['Tanggal_Str'].str.contains(date_str)) & (df['Entitas'] == sel_entity)]
+                 is_filled = not existing.empty
 
-            # Check skipped
             is_skipped = False
             if not logs.empty and 'Tanggal' in logs.columns:
-                skipped_log = logs[(logs['Tanggal'].astype(str).str.startswith(date_str)) & (logs['Entitas'] == sel_entity)]
+                logs['Tanggal_Str'] = logs['Tanggal'].astype(str)
+                skipped_log = logs[(logs['Tanggal_Str'].str.contains(date_str)) & (logs['Entitas'] == sel_entity)]
                 is_skipped = not skipped_log.empty
 
             st.write(f"**Status for {date_str}:**")
             if is_filled:
-                st.success(f"✅ Data Found ({len(existing) if is_filled else 0} articles)")
+                st.success(f"✅ Data Found ({len(existing)} articles)")
             elif is_skipped:
                 st.warning("🟨 Marked as Skipped/No News")
             else:
                 st.error("🟥 No Data (Empty)")
 
-            # Actions for Empty/Skipped
+            # Actions
             if not is_filled:
                 st.markdown("---")
                 st.write("**Quick Actions:**")
                 if st.button("🚫 Mark as No News / Pass"):
                     try:
-                        r = requests.post(f"{api_url}/log_empty", json={"date": date_str, "entity": sel_entity, "reason": "Manual Pass"})
-                        if r.status_code == 200:
-                            st.success("Marked as Skipped!")
-                            time.sleep(1)
-                            st.rerun()
+                        gsheet_handler.log_empty_date(date_str, sel_entity, "Manual Pass")
+                        st.success("Marked as Skipped!")
+                        time.sleep(1)
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
 
                 st.markdown("---")
                 st.write("**Find News Links:**")
                 search_kw = st.text_input("Search Keywords", value="news berita terkini")
-                if st.button("🔎 Search Links"):
-                    with st.spinner("Searching..."):
-                        try:
-                            payload = {"date": date_str, "entity": sel_entity, "keywords": search_kw}
-                            r = requests.post(f"{api_url}/search_links", json=payload)
-                            if r.status_code == 200:
-                                links = r.json()
-                                if links:
-                                    st.write(f"Found {len(links)} links (Strict Date Match):")
-                                    for l in links:
-                                        link_url = l.get('url')
-                                        link_title = l.get('title')
-                                        st.markdown(f"- [{link_title}]({link_url})")
-                                        st.code(link_url) # Easy copy
-                                else:
-                                    st.info("No links found for this specific date.")
-                        except Exception as e:
-                            st.error(f"Search Error: {e}")
+
+                if st.button("🔎 Search Links", disabled=(st.session_state.job_id is not None)):
+                    # Clear previous results
+                    st.session_state.search_results = []
+
+                    # Create Search Job
+                    job_id = str(uuid.uuid4())
+                    db_handler.create_job(job_id, "queued")
+                    db_handler.save_job_params(job_id, {
+                        "job_type": "search_links",
+                        "date": date_str,
+                        "entity": sel_entity,
+                        "keywords": search_kw
+                    })
+                    st.session_state.job_id = job_id
+                    st.session_state.job_type = "search_links"
+                    st.rerun()
+
+                # Display Search Results if available
+                if st.session_state.search_results:
+                     st.write(f"Found {len(st.session_state.search_results)} links:")
+                     for item in st.session_state.search_results:
+                         title = item.get('Judul', 'No Title') # 'title' mapped to 'Judul' in get_job_results
+                         url = item.get('URL')
+                         st.markdown(f"- [{title}]({url})")
+                         st.code(url)
 
         with c2:
             st.write("### 📝 Editor / Scraper")
 
-            # Helper to Scrape from URL
             with st.expander("🌐 Scrape from URL (Auto-Fill)"):
-                st.caption("Scraping will fill title/content. Date will be updated if detected in the article.")
+                st.caption("Scraping will fill title/content. Date updated if detected.")
                 url_to_scrape = st.text_input("Paste URL here")
-                if st.button("🚀 Scrape URL"):
-                     if url_to_scrape:
-                         with st.spinner("Scraping..."):
-                             try:
-                                 r = requests.post(f"{api_url}/scrape_url", json={"url": url_to_scrape})
-                                 if r.status_code == 200:
-                                     scraped_data = r.json()
-                                     st.session_state['temp_title'] = scraped_data.get('Judul', '')
-                                     st.session_state['temp_content'] = scraped_data.get('Isi', '')
-                                     st.session_state['temp_url'] = url_to_scrape
 
-                                     # Update Date if found
-                                     scraped_date_str = scraped_data.get('Tanggal')
-                                     if scraped_date_str:
-                                         try:
-                                             # Assuming backend returns YYYY-MM-DD or standard iso format
-                                             new_date = datetime.strptime(str(scraped_date_str), "%Y-%m-%d").date()
-                                             st.session_state['input_manual_date'] = new_date
-                                             st.success(f"Scraped! Date updated to {new_date}.")
-                                             time.sleep(0.5)
-                                             st.rerun()
-                                         except:
-                                             st.warning("Scraped content, but could not parse date.")
-                                     else:
-                                         st.error("⚠️ DATE NOT DETECTED in article! Please verify the date manually.")
-                                 else:
-                                     st.error(f"Failed: {r.text}")
-                             except Exception as e:
-                                 st.error(f"Error: {e}")
+                if st.button("🚀 Scrape URL", disabled=(st.session_state.job_id is not None)):
+                    if url_to_scrape:
+                        st.session_state.scrape_url_result = None
 
-            # Form
+                        job_id = str(uuid.uuid4())
+                        db_handler.create_job(job_id, "queued")
+                        db_handler.save_job_params(job_id, {
+                            "job_type": "scrape_url",
+                            "url": url_to_scrape
+                        })
+                        st.session_state.job_id = job_id
+                        st.session_state.job_type = "scrape_url"
+                        st.rerun()
+
+            # Check for Scrape Result
+            if st.session_state.scrape_url_result:
+                res = st.session_state.scrape_url_result
+                st.session_state['temp_title'] = res.get('Judul', '')
+                st.session_state['temp_content'] = res.get('Isi', '')
+                st.session_state['temp_url'] = res.get('URL', '')
+
+                # Check date
+                s_date = res.get('Tanggal')
+                if s_date:
+                     try:
+                         new_date = datetime.strptime(str(s_date), "%Y-%m-%d").date()
+                         st.session_state['input_manual_date'] = new_date
+                         st.success(f"Date detected: {new_date}")
+                     except:
+                         pass
+
+                # Clear result after consuming
+                st.session_state.scrape_url_result = None
+                st.rerun()
+
             with st.form("manual_form"):
-                # Use session state for pre-filling if available
                 default_title = st.session_state.get('temp_title', '')
                 default_content = st.session_state.get('temp_content', '')
                 default_url = st.session_state.get('temp_url', '')
 
-                # Clear temp state after use to avoid sticking
                 if 'temp_title' in st.session_state: del st.session_state['temp_title']
                 if 'temp_content' in st.session_state: del st.session_state['temp_content']
                 if 'temp_url' in st.session_state: del st.session_state['temp_url']
@@ -359,23 +360,18 @@ if app_mode == "📝 Input & Scraping":
                         "Isi_Inggris": ""
                     }
                     try:
-                        r = requests.post(f"{api_url}/save", json=payload)
-                        if r.status_code == 200:
-                            st.success("Tersimpan!")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error(r.text)
+                        gsheet_handler.append_to_sheet(payload)
+                        st.success("Tersimpan!")
+                        time.sleep(1)
+                        st.rerun()
                     except Exception as e:
-                        st.error(f"Backend Error at {api_url}: {e}")
+                        st.error(f"Save Error: {e}")
 
-            # Show existing data for this date below form
             if is_filled:
                 st.write("---")
                 st.write("#### Existing Data for this Date:")
                 if not existing.empty:
                      st.dataframe(existing[["Judul", "URL"]])
-
 
     # --- 2. BATCH SCRAPE ---
     elif sub_page == "Batch Scrape (Auto)":
@@ -388,284 +384,213 @@ if app_mode == "📝 Input & Scraping":
         
         if st.button("Start Batch Scrape", disabled=(st.session_state.job_id is not None)):
             if start > end:
-                st.error("Error: Start Date must be before or equal to End Date.")
+                st.error("Start Date must be before End Date.")
             else:
-                payload = {
-                    "start_date": str(start), "end_date": str(end),
-                    "entity": entity, "keywords": kw
-                }
-                try:
-                    r = requests.post(f"{api_url}/start_scrape", json=payload)
-                    if r.status_code == 200:
-                        data = r.json()
-                        st.session_state.job_id = data["job_id"]
-                        st.session_state.job_type = "batch"
-                        st.rerun()
-                    else:
-                        st.error(f"Error: {r.text}")
-                except Exception as e:
-                    st.error(f"Connection Error at {api_url}: {e}")
+                job_id = str(uuid.uuid4())
+                db_handler.create_job(job_id, "queued")
+                db_handler.save_job_params(job_id, {
+                    "job_type": "batch_scrape",
+                    "start_date": str(start),
+                    "end_date": str(end),
+                    "entity": entity,
+                    "keywords": kw
+                })
+                st.session_state.job_id = job_id
+                st.session_state.job_type = "batch"
+                st.rerun()
 
-        # Display Results from Session State
         if not st.session_state.batch_results.empty:
             st.divider()
             st.write(f"### 📥 Scraped Results ({len(st.session_state.batch_results)})")
 
-            c_clear, _ = st.columns([1, 5])
-            if c_clear.button("🗑️ Clear Results"):
+            if st.button("🗑️ Clear Results"):
                 st.session_state.batch_results = pd.DataFrame()
                 st.rerun()
 
             edited = st.data_editor(st.session_state.batch_results, key="batch_editor")
 
-            if st.button("💾 Save Selected Results"):
-                count = 0
-                for _, row in edited.iterrows():
-                    if row.get("Pilih", True):
-                        payload = row.to_dict()
-                        clean_payload = serialize_payload(payload)
-                        try:
-                            requests.post(f"{api_url}/save", json=clean_payload)
-                            count += 1
-                        except Exception as e:
-                             st.error(f"Save failed: {e}")
-                st.success(f"Saved {count} items.")
+            # Note: Batch scrape worker ALREADY saves to DB/Sheet?
+            # In api.py run_scrape_job, it saves to DB AND Syncs to Drive.
+            # So the results in `batch_results` are ALREADY saved.
+            # But the user might want to edit them?
+            # If they are already synced, editing here won't update the sheet unless we implement update logic.
+            # The previous logic was: Frontend receives results, then User selects "Save".
+            # BUT api.py logic was: Worker saves immediately.
+            # Wait, `api.py` run_scrape_job says:
+            # `db_handler.save_result` (Local DB)
+            # Then `Syncing to Drive...` (GSheet)
+            # So they ARE already in GSheet.
+            # So "Save Selected Results" button in previous code was... redundant?
+            # Or maybe previous code didn't sync automatically?
+            # Looking at `api.py` `run_scrape_job`: It DOES call `gsheet_handler.bulk_append`.
+            # So yes, they are autosaved.
+            # The previous Frontend had "Save Selected Results" which called `/save`.
+            # If `run_scrape_job` already saved them, this would create duplicates!
+            # Let's check `api.py` again.
+            # `run_scrape_job` -> `gsheet_handler.bulk_append`.
+            # `frontend.py` -> `requests.post(..., /start_scrape)`.
+            # Then it just DISPLAYS results.
+            # The previous frontend `Batch Scrape` section had `st.data_editor` and `Save Selected Results`.
+            # If the user clicked Save, it would POST `/save`.
+            # This implies the previous `start_scrape` MIGHT NOT have been syncing to GSheet?
+            # In `api.py`: `run_scrape_job` DOES sync.
+            # So the previous frontend was likely creating duplicates if the user clicked Save.
+            # OR the user requested "if data exists... don't show".
+
+            # Clarification: User said "kalau data sudah ada di dataset jangan lagi ditampilkan".
+            # This implies Deduplication.
+            # `worker.py` (and `api.py`) has deduplication logic BEFORE saving.
+
+            # So, if `worker.py` autosaves, we should just show "Results (Saved)" and maybe allow Deletion?
+            # Or maybe we should disable autosync in worker and let user Review & Save?
+            # The "Gap Filler" mode in `frontend.py` had a "Save Filled Gaps" button.
+            # The "Batch Scrape" also had a "Save Selected Results".
+            # This suggests the user wants a Review step.
+
+            # BUT, `api.py` was written to autosave.
+            # If I want Review step, `worker.py` should save to DB but NOT sync to GSheet until approved.
+            # However, `worker.py` calls `gsheet_handler.bulk_append`.
+
+            # To be safe and follow the "Worker replaces API" model exactly:
+            # `worker.py` behaves like `api.py`. It syncs.
+            # So Frontend just displays "Here is what was scraped and saved."
+            # If the user edits it here, they are editing a disconnected dataframe.
+
+            st.info("Results have been automatically saved to the database/sheet.")
+
 
     # --- 3. GAP FILLER ---
     elif sub_page == "Gap Filler (Manual Scrape)":
         st.subheader("🕵️ Manual Scrape / Gap Filler")
-        st.write("Automatically find missing dates in the database and scrape for them.")
-
         c1, c2 = st.columns(2)
         entity_gap = c1.selectbox("Entitas", ["AirAsia", "Garuda Indonesia"], key="gap_ent")
         kw_gap = c2.text_input("Keywords", key="gap_kw")
-
         start_gap = c1.date_input("Range Start", key="gap_start")
         end_gap = c2.date_input("Range End", key="gap_end")
 
         if st.button("🔍 Scan & Fill Gaps", disabled=(st.session_state.job_id is not None)):
             if start_gap > end_gap:
-                st.error("Error: Start Date must be before or equal to End Date.")
+                st.error("Start Date must be before End Date.")
             else:
-                payload = {
+                job_id = str(uuid.uuid4())
+                db_handler.create_job(job_id, "queued")
+                db_handler.save_job_params(job_id, {
+                    "job_type": "batch_scrape", # Gap filler is just batch scrape
                     "start_date": str(start_gap),
                     "end_date": str(end_gap),
                     "entity": entity_gap,
                     "keywords": kw_gap
-                }
-                try:
-                    r = requests.post(f"{api_url}/start_scrape", json=payload)
-                    if r.status_code == 200:
-                        data = r.json()
-                        st.session_state.job_id = data["job_id"]
-                        st.session_state.job_type = "gap"
-                        st.rerun()
-                    else:
-                        st.error(f"Error: {r.text}")
-                except Exception as e:
-                    st.error(f"Connection Error: {e}")
+                })
+                st.session_state.job_id = job_id
+                st.session_state.job_type = "gap"
+                st.rerun()
 
-        # Display Results from Session State
         if not st.session_state.gap_results.empty:
             st.divider()
-
-            # --- Client-Side Deduplication ---
-            # Backend usually filters, but for better UX, we filter again against currently loaded data.
-            # This handles cases where backend data might have been slightly out of sync or fuzzy matching missed something.
-
-            df_existing = get_data(api_url)
+            # Client-side deduplication for display
+            df_existing = get_data()
             existing_urls = set()
-            existing_sigs = set() # (Date, Title)
+            if not df_existing.empty and 'URL' in df_existing.columns:
+                 existing_urls = set(df_existing['URL'].dropna().astype(str).values)
 
-            if not df_existing.empty:
-                if 'URL' in df_existing.columns:
-                    existing_urls = set(df_existing['URL'].dropna().astype(str).values)
+            # Filter
+            mask = []
+            for _, row in st.session_state.gap_results.iterrows():
+                url = row.get('URL')
+                if url in existing_urls: mask.append(False)
+                else: mask.append(True)
 
-                for _, row in df_existing.iterrows():
-                     d_sig = str(row.get('Tanggal', '')).strip()
-                     t_sig = str(row.get('Judul', '')).strip().lower()
+            df_display = st.session_state.gap_results[mask]
 
-                     # Normalize date
-                     try:
-                         if d_sig:
-                             # Use errors='coerce' to handle mixed formats safely
-                             dt = pd.to_datetime(d_sig, dayfirst=True, errors='coerce')
-                             if not pd.isna(dt):
-                                 d_sig = dt.strftime("%Y-%m-%d")
-                     except:
-                         pass
+            st.write(f"### 📥 Results ({len(df_display)})")
+            st.caption("Duplicates hidden.")
 
-                     if d_sig and t_sig:
-                         existing_sigs.add((d_sig, t_sig))
-
-            # Filter the gap results
-            original_count = len(st.session_state.gap_results)
-
-            def is_unique(row):
-                url = str(row.get('url', ''))
-                if url and url in existing_urls:
-                    return False
-
-                d_sig = str(row.get('date', '')).strip()
-                t_sig = str(row.get('title', '')).strip().lower()
-
-                if (d_sig, t_sig) in existing_sigs:
-                    return False
-                return True
-
-            # Use boolean indexing if DataFrame is standard, but gap_results might be constructed from API JSON
-            # which usually has keys "title", "date", "url" etc.
-            # But get_job_results returns keys "id", "date", "entity", "title", "content", "url"
-
-            # Let's inspect the columns.
-            # Usually: date, entity, title, content, url
-
-            df_gap = st.session_state.gap_results.copy()
-
-            # Helper to normalize for check
-            keep_mask = []
-            for _, row in df_gap.iterrows():
-                url = str(row.get('url', ''))
-                d = str(row.get('date', '')).strip()
-
-                # Normalize date
-                try:
-                    if d:
-                        # Use errors='coerce' to handle mixed formats safely
-                        dt = pd.to_datetime(d, dayfirst=True, errors='coerce')
-                        if not pd.isna(dt):
-                            d = dt.strftime("%Y-%m-%d")
-                except:
-                    pass
-
-                t = str(row.get('title', '')).strip().lower()
-
-                if url in existing_urls:
-                    keep_mask.append(False)
-                elif (d, t) in existing_sigs:
-                    keep_mask.append(False)
-                else:
-                    keep_mask.append(True)
-
-            df_gap_filtered = df_gap[keep_mask]
-
-            st.write(f"### 📥 Gap Filler Results ({len(df_gap_filtered)})")
-            if len(df_gap_filtered) < original_count:
-                st.caption(f"Hidden {original_count - len(df_gap_filtered)} duplicates already in dataset.")
-
-            c_clear_gap, _ = st.columns([1, 5])
-            if c_clear_gap.button("🗑️ Clear Gap Results"):
+            if st.button("🗑️ Clear Results", key="clr_gap"):
                 st.session_state.gap_results = pd.DataFrame()
                 st.rerun()
 
-            edited_gap = st.data_editor(df_gap_filtered, key="gap_editor")
-            if st.button("💾 Save Filled Gaps"):
-                count = 0
-                for _, row in edited_gap.iterrows():
-                    if row.get("Pilih", True):
-                        payload = row.to_dict()
-                        # Mapping might be needed if column names differ from save API expectation
-                        # Save API expects: Tanggal, Entitas, Judul, Isi, URL
-                        # Job results: date, entity, title, content, url
-
-                        # Remap
-                        mapped_payload = {
-                            "Tanggal": row.get("date"),
-                            "Entitas": row.get("entity"),
-                            "Judul": row.get("title"),
-                            "Isi": row.get("content"),
-                            "URL": row.get("url"),
-                            "Judul_Inggris": "",
-                            "Isi_Inggris": ""
-                        }
-
-                        clean_payload = serialize_payload(mapped_payload)
-                        try:
-                            requests.post(f"{api_url}/save", json=clean_payload)
-                            count += 1
-                        except Exception as e:
-                            st.error(f"Save error: {e}")
-                st.success(f"Saved {count} items.")
+            st.data_editor(df_display)
+            st.info("Results are automatically saved.")
 
     # --- 4. MONITOR ---
     elif sub_page == "Monitor Data":
         st.subheader("Data Monitor")
-
         c1, c2, c3, c4 = st.columns(4)
-        m_start = c1.date_input("Filter Start Date", value=datetime.now() - timedelta(days=30))
-        m_end = c2.date_input("Filter End Date", value=datetime.now())
-        m_entity = c3.selectbox("Filter Entity", ["All", "AirAsia", "Garuda Indonesia"])
+        m_start = c1.date_input("Start", value=datetime.now() - timedelta(days=30))
+        m_end = c2.date_input("End", value=datetime.now())
+        m_entity = c3.selectbox("Entity", ["All", "AirAsia", "Garuda Indonesia"])
+        if c4.button("Refresh"): st.rerun()
 
-        if c4.button("Refresh"):
-            st.rerun()
-        
-        df = get_data(api_url)
-
-        if df.empty:
-            st.warning("Data kosong atau gagal memuat.")
+        df = get_data()
+        if not df.empty and "Tanggal" in df.columns:
+            df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', dayfirst=True)
+            mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
+            if m_entity != "All": mask = mask & (df["Entitas"] == m_entity)
+            st.dataframe(df[mask].sort_values(by="Tanggal", ascending=False))
         else:
-            # Apply Filters
-            if "Tanggal" in df.columns:
-                # Normalize dates
-                df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', dayfirst=True)
-
-                mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
-                if m_entity != "All":
-                    mask = mask & (df["Entitas"] == m_entity)
-
-                df_filtered = df[mask].sort_values(by="Tanggal", ascending=False)
-                st.write(f"Showing {len(df_filtered)} records.")
-                st.dataframe(df_filtered)
-            else:
-                st.warning("Column 'Tanggal' not found for filtering.")
-                st.dataframe(df)
+            st.write("No data.")
 
 # ==========================================
 # APP B: TRANSLATOR
 # ==========================================
 elif app_mode == "🔄 Translator":
     st.title("🔄 Auto Translator")
-    
     tab1, tab2 = st.tabs(["Pending", "History"])
-    
-    # Refresh data
-    df = get_data(api_url)
+    df = get_data()
     
     with tab1:
-        if not df.empty:
-            if 'Judul_Inggris' in df.columns:
-                mask = (df['Judul_Inggris'] == "") | (df['Isi_Inggris'] == "")
-                pending = df[mask].copy()
-                if "Pilih" not in pending.columns:
-                    pending.insert(0, "Pilih", True)
-                
-                st.info(f"Pending: {len(pending)}")
-                edited_pend = st.data_editor(pending, key="pend_edit")
-                
-                if st.button("Translate Selected"):
-                    to_translate = edited_pend[edited_pend["Pilih"] == True]
-                    if to_translate.empty:
-                        st.warning("No rows selected.")
-                    else:
-                        payload = {"rows": to_translate.to_dict(orient="records")}
-                        with st.spinner("Translating..."):
-                            try:
-                                r = requests.post(f"{api_url}/translate", json=payload)
-                                if r.status_code == 200:
-                                    st.success("Translated & Updated!")
-                                    time.sleep(1)
-                                    st.rerun()
-                                else:
-                                    st.error(f"API Error: {r.text}")
-                            except Exception as e:
-                                st.error(f"API Error at {api_url}: {e}")
-            else:
-                st.warning("Kolom Judul_Inggris tidak ditemukan.")
-        else:
-            st.warning("Belum ada data.")
-    
+        if not df.empty and 'Judul_Inggris' in df.columns:
+            mask = (df['Judul_Inggris'] == "") | (df['Isi_Inggris'] == "") | (df['Judul_Inggris'].isnull())
+            pending = df[mask].copy()
+            pending["Pilih"] = True
+
+            st.info(f"Pending: {len(pending)}")
+            edited = st.data_editor(pending)
+
+            if st.button("Translate Selected"):
+                to_proc = edited[edited["Pilih"] == True]
+                if not to_proc.empty:
+                    with st.spinner("Translating... (This uses local CPU/GPU)"):
+                        # Use translator_utils directly
+                        translator_utils.load_model()
+                        splitter = translator_utils.get_splitter()
+
+                        count = 0
+                        for idx, row in to_proc.iterrows():
+                            # We need to update GSheet.
+                            # We have to be careful about matching the row.
+                            # We assume Date+Entity+Title is unique key?
+                            # Or just use row index if we are careful?
+                            # GSheet handler update_row_in_sheet uses (date, entity, old_title).
+
+                            old_title = row['Judul']
+                            j_ing = row['Judul_Inggris']
+                            i_ing = row['Isi_Inggris']
+
+                            updated = {}
+                            if not j_ing:
+                                j_ing = translator_utils.smart_translate(old_title)
+                                updated['Judul_Inggris'] = j_ing
+                            if not i_ing:
+                                i_ing = translator_utils.smart_translate(row['Isi'])
+                                updated['Isi_Inggris'] = i_ing
+
+                            if updated:
+                                try:
+                                    gsheet_handler.update_row_in_sheet(
+                                        row['Tanggal'],
+                                        row['Entitas'],
+                                        old_title,
+                                        updated
+                                    )
+                                    count += 1
+                                except Exception as e:
+                                    st.error(f"Failed to update {old_title}: {e}")
+
+                        st.success(f"Translated {count} articles.")
+                        time.sleep(1)
+                        st.rerun()
+
     with tab2:
         if not df.empty and 'Judul_Inggris' in df.columns:
-            mask = (df['Judul_Inggris'] != "")
-            hist = df[mask]
-            st.dataframe(hist)
+            st.dataframe(df[df['Judul_Inggris'] != ""])

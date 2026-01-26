@@ -73,6 +73,9 @@ def init_db():
         )
     ''')
 
+    # Table: Job Params (JSON)
+    c.execute('''CREATE TABLE IF NOT EXISTS job_params (job_id TEXT PRIMARY KEY, params_json TEXT)''')
+
     conn.commit()
     conn.close()
 
@@ -85,8 +88,46 @@ def create_job(job_id, status="queued", total=0, processed=0, action="Initializi
         INSERT INTO jobs (job_id, status, total, processed, created_at, current_action, msg)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (job_id, status, total, processed, time.time(), action, ""))
+
+    # Store parameters as JSON in 'msg' or a new column?
+    # Actually, we need to store the request params (start, end, entity, keywords).
+    # Since we can't easily change schema, let's append params to 'msg' as a JSON string for now
+    # OR create a new table 'job_params'.
+    # Let's rely on 'msg' being used for error messages and create a new column 'params' if possible.
+    # But for now, to avoid migration issues, let's create a separate table for params or just append column if not exists.
+    # Simpler: Create a new table job_params
+
     conn.commit()
     conn.close()
+
+def save_job_params(job_id, params_dict):
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('INSERT OR REPLACE INTO job_params (job_id, params_json) VALUES (?, ?)', (job_id, json.dumps(params_dict)))
+    conn.commit()
+    conn.close()
+
+def get_job_params(job_id):
+    conn = get_conn()
+    c = conn.cursor()
+    try:
+        c.execute('SELECT params_json FROM job_params WHERE job_id = ?', (job_id,))
+        row = c.fetchone()
+        if row:
+            return json.loads(row['params_json'])
+    except:
+        pass
+    return {}
+
+def get_next_queued_job():
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute('SELECT job_id FROM jobs WHERE status = "queued" ORDER BY created_at ASC LIMIT 1')
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return row['job_id']
+    return None
 
 def update_job_progress(job_id, processed, action=None):
     conn = get_conn()

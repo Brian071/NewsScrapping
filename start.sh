@@ -4,47 +4,28 @@ set -e
 # Function to cleanup background processes on exit
 cleanup() {
     echo "Stopping background processes..."
-    # Kill the process group to ensure all children (watchdog, uvicorn, streamlit) die
     kill -- -$$ 2>/dev/null || true
     echo "Done."
 }
 trap cleanup EXIT
 
-# Watchdog function for Backend
-run_backend() {
+# Watchdog function for Worker
+run_worker() {
     while true; do
-        echo "[Watchdog] Starting Backend (Uvicorn)..."
-        # Run uvicorn. If it crashes, the loop continues.
-        uvicorn api:app --host 0.0.0.0 --port 8000 --loop asyncio > api.log 2>&1
+        echo "[Watchdog] Starting Background Worker..."
+        python3 worker.py >> worker.log 2>&1
         EXIT_CODE=$?
-        echo "[Watchdog] Backend crashed with exit code $EXIT_CODE. Restarting in 3 seconds..."
+        echo "[Watchdog] Worker crashed/exited with code $EXIT_CODE. Restarting in 3 seconds..."
         sleep 3
     done
 }
 
-# Start Backend Watchdog in background
-run_backend &
-BACKEND_WATCHDOG_PID=$!
+# Start Worker Watchdog in background
+run_worker &
+WORKER_PID=$!
 
-echo "Waiting for Backend to respond at http://localhost:8000..."
-# Wait up to 60 seconds (increased from 30) for initial startup
-for i in {1..60}; do
-    if curl -s http://localhost:8000/health > /dev/null; then
-        echo "✅ Backend is UP!"
-        break
-    fi
-    echo -n "."
-    sleep 1
-done
-echo ""
-
-if ! curl -s http://localhost:8000/health > /dev/null; then
-    echo "❌ Backend failed to start initially. Check api.log:"
-    tail -n 20 api.log
-    # We don't exit here anymore because the watchdog might eventually succeed,
-    # but we should warn. Streamlit will just fail to connect until it's up.
-fi
-
+echo "Worker started in background (PID $WORKER_PID)."
 echo "Starting Frontend (Streamlit)..."
-# Run Streamlit. If this dies, the script exits (because of set -e? No, streamlit is the main process now)
+
+# Run Streamlit. If this dies, the script exits.
 streamlit run frontend.py --server.headless true
