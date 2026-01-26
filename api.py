@@ -13,6 +13,7 @@ from newspaper import Article
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
 import os
 import gc
+import re
 
 # FORCE Standard Event Loop Policy
 try:
@@ -114,13 +115,45 @@ def smart_translate(text):
             translated_parts.append(chunk)
     return " ".join(translated_parts)
 
+# --- Normalization Logic ---
+def normalize_url(url: str) -> str:
+    """
+    Normalize URL for consistent deduplication.
+    - Remove 'http://', 'https://'
+    - Remove 'www.'
+    - Remove trailing slash
+    - Lowercase
+    """
+    if not url: return ""
+    u = str(url).strip().lower()
+    u = re.sub(r'^https?://', '', u)
+    u = re.sub(r'^www\.', '', u)
+    if u.endswith('/'):
+        u = u[:-1]
+    return u
+
+def normalize_title(title: str) -> str:
+    """
+    Normalize Title for consistent deduplication.
+    - Lowercase
+    - Strip whitespace
+    - Remove punctuation (optional, but good for fuzzy matching)
+    """
+    if not title: return ""
+    # Lowercase and strip
+    t = str(title).strip().lower()
+    # Remove extra spaces
+    t = re.sub(r'\s+', ' ', t)
+    return t
+
 # --- Scraping Logic ---
 async def extract_article_content_async(url):
     if not url: return None, None, None
     try:
         browser_cfg = BrowserConfig(
             headless=True,
-            verbose=True
+            verbose=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
 
         async with AsyncWebCrawler(config=browser_cfg) as crawler:
@@ -171,11 +204,25 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
         JOBS[job_id]["total"] = delta
         JOBS[job_id]["current_action"] = f"Starting scrape for {req.entity} ({delta} days)"
 
+        # --- Load Existing Data for Deduplication ---
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
         existing_urls = set()
-        if not df_local.empty and "URL" in df_local.columns:
-            # Normalize URLs in existing data (strip whitespace)
-            existing_urls = set(str(u).strip() for u in df_local["URL"].values if str(u).strip())
+        existing_signatures = set() # Set of (date, title)
+
+        if not df_local.empty:
+            # Populate normalized URLs
+            if "URL" in df_local.columns:
+                for u in df_local["URL"].values:
+                    norm = normalize_url(u)
+                    if norm: existing_urls.add(norm)
+
+            # Populate signatures (Date + Title)
+            if "Tanggal" in df_local.columns and "Judul" in df_local.columns:
+                for idx, row in df_local.iterrows():
+                    d_str = str(row["Tanggal"]).strip()
+                    t_str = str(row["Judul"]).strip()
+                    if d_str and t_str:
+                        existing_signatures.add((d_str, normalize_title(t_str)))
 
         job_seen_urls = set()
         tasks = []
@@ -196,26 +243,54 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                 valid_results = []
                 for res in results:
                     url = res.get('url')
+                    title = res.get('title')
+
                     if not url: continue
-                    url_clean = str(url).strip()
-                    if url_clean in existing_urls: continue
-                    if url_clean in job_seen_urls: continue
+
+                    # 1. URL Check
+                    url_norm = normalize_url(url)
+                    if url_norm in existing_urls:
+                        print(f"Duplicate URL found: {url}")
+                        continue
+                    if url_norm in job_seen_urls:
+                        continue
+
+                    # 2. Title + Date Check (Prediction)
+                    # Note: DDGS might not return exact date, but we are searching FOR this date
+                    # So we assume if we scrape it and it HAS this date, it might be dup.
+                    # But here we only have the Title from Search Result.
+                    # Let's check Title + Target Date
+                    if title:
+                         title_norm = normalize_title(title)
+                         if (date_str, title_norm) in existing_signatures:
+                             print(f"Duplicate Title for {date_str}: {title}")
+                             continue
+
                     valid_results.append(res)
 
                 for res in valid_results:
                     url = res.get('url')
-                    url_clean = str(url).strip()
-                    job_seen_urls.add(url_clean)
+                    url_norm = normalize_url(url)
+                    job_seen_urls.add(url_norm)
 
                     t, c, pub_date = await extract_article_content_async(url)
 
                     # Relaxed validation: Just need title and some content
                     if t and t != "Error":
+                        # Double check if scraped Title + Scraped Date is duplicate
+                        # (Because searching for Date X might return article from Date Y)
+                        final_date = pub_date if pub_date else "" # Ensure empty string if None
+
+                        if final_date and t:
+                             sig = (final_date, normalize_title(t))
+                             if sig in existing_signatures:
+                                 print(f"Duplicate Found after scrape: {final_date} - {t}")
+                                 continue
+
                         found_any = True
                         return {
                             "Pilih": True,
-                            # FIX: If pub_date is None, return empty string, NOT date_str
-                            "Tanggal": pub_date if pub_date else "",
+                            "Tanggal": final_date,
                             "Entitas": req.entity,
                             "Judul": t,
                             "Isi": c if c else "",
@@ -223,15 +298,6 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                             "Judul_Inggris": "",
                             "Isi_Inggris": ""
                         }
-
-                # If no articles found, return placeholder if desired?
-                # User said: "bahkan kalau kamu gagal scrape tanggalnya saja boleh di masukkan"
-                # But recent instruction says: "The user strictly require the Date field to be empty if extraction fails"
-                # Wait, the fallback here was returning "No Data Found".
-                # If no articles found at all, we probably shouldn't return a row unless we want to indicate "checked".
-                # The existing code returned a row with "No Data Found" and "Pilih: False".
-                # I will keep this behavior but ensure the date logic follows requirements if we were to return a real article.
-                # For "No Data Found", we are returning date_str so the user knows WHICH date had no data. This is likely fine as it's not a "failed extraction" but "no results".
 
                 if not found_any:
                     return {

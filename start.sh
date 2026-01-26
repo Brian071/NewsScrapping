@@ -5,9 +5,16 @@ set -e
 cleanup() {
     echo "Stopping background processes..."
     kill $(jobs -p) 2>/dev/null || true
+    # Also ensure port 8000 is free
+    kill $(lsof -t -i:8000) 2>/dev/null || true
     echo "Done."
 }
 trap cleanup EXIT
+
+# Force kill anything on port 8000 before starting
+echo "Ensuring port 8000 is free..."
+kill $(lsof -t -i:8000) 2>/dev/null || true
+sleep 2
 
 echo "Starting Backend (Uvicorn)..."
 # Use nohup or just background, but we want it to die when this script dies (handled by trap)
