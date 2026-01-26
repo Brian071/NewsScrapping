@@ -284,14 +284,14 @@ if app_mode == "📝 Input & Scraping":
                             if r.status_code == 200:
                                 links = r.json()
                                 if links:
-                                    st.write(f"Found {len(links)} links:")
+                                    st.write(f"Found {len(links)} links (Strict Date Match):")
                                     for l in links:
                                         link_url = l.get('url')
                                         link_title = l.get('title')
                                         st.markdown(f"- [{link_title}]({link_url})")
                                         st.code(link_url) # Easy copy
                                 else:
-                                    st.info("No links found.")
+                                    st.info("No links found for this specific date.")
                         except Exception as e:
                             st.error(f"Search Error: {e}")
 
@@ -326,7 +326,7 @@ if app_mode == "📝 Input & Scraping":
                                          except:
                                              st.warning("Scraped content, but could not parse date.")
                                      else:
-                                         st.warning("⚠️ Date NOT detected in article. Please set date manually!")
+                                         st.error("⚠️ DATE NOT DETECTED in article! Please verify the date manually.")
                                  else:
                                      st.error(f"Failed: {r.text}")
                              except Exception as e:
@@ -468,20 +468,96 @@ if app_mode == "📝 Input & Scraping":
         # Display Results from Session State
         if not st.session_state.gap_results.empty:
             st.divider()
-            st.write(f"### 📥 Gap Filler Results ({len(st.session_state.gap_results)})")
+
+            # --- Client-Side Deduplication ---
+            # Backend usually filters, but for better UX, we filter again against currently loaded data.
+            # This handles cases where backend data might have been slightly out of sync or fuzzy matching missed something.
+
+            df_existing = get_data(api_url)
+            existing_urls = set()
+            existing_sigs = set() # (Date, Title)
+
+            if not df_existing.empty:
+                if 'URL' in df_existing.columns:
+                    existing_urls = set(df_existing['URL'].dropna().astype(str).values)
+
+                for _, row in df_existing.iterrows():
+                     d_sig = str(row.get('Tanggal', '')).strip()
+                     t_sig = str(row.get('Judul', '')).strip().lower()
+                     if d_sig and t_sig:
+                         existing_sigs.add((d_sig, t_sig))
+
+            # Filter the gap results
+            original_count = len(st.session_state.gap_results)
+
+            def is_unique(row):
+                url = str(row.get('url', ''))
+                if url and url in existing_urls:
+                    return False
+
+                d_sig = str(row.get('date', '')).strip()
+                t_sig = str(row.get('title', '')).strip().lower()
+
+                if (d_sig, t_sig) in existing_sigs:
+                    return False
+                return True
+
+            # Use boolean indexing if DataFrame is standard, but gap_results might be constructed from API JSON
+            # which usually has keys "title", "date", "url" etc.
+            # But get_job_results returns keys "id", "date", "entity", "title", "content", "url"
+
+            # Let's inspect the columns.
+            # Usually: date, entity, title, content, url
+
+            df_gap = st.session_state.gap_results.copy()
+
+            # Helper to normalize for check
+            keep_mask = []
+            for _, row in df_gap.iterrows():
+                url = str(row.get('url', ''))
+                d = str(row.get('date', '')).strip()
+                t = str(row.get('title', '')).strip().lower()
+
+                if url in existing_urls:
+                    keep_mask.append(False)
+                elif (d, t) in existing_sigs:
+                    keep_mask.append(False)
+                else:
+                    keep_mask.append(True)
+
+            df_gap_filtered = df_gap[keep_mask]
+
+            st.write(f"### 📥 Gap Filler Results ({len(df_gap_filtered)})")
+            if len(df_gap_filtered) < original_count:
+                st.caption(f"Hidden {original_count - len(df_gap_filtered)} duplicates already in dataset.")
 
             c_clear_gap, _ = st.columns([1, 5])
             if c_clear_gap.button("🗑️ Clear Gap Results"):
                 st.session_state.gap_results = pd.DataFrame()
                 st.rerun()
 
-            edited_gap = st.data_editor(st.session_state.gap_results, key="gap_editor")
+            edited_gap = st.data_editor(df_gap_filtered, key="gap_editor")
             if st.button("💾 Save Filled Gaps"):
                 count = 0
                 for _, row in edited_gap.iterrows():
                     if row.get("Pilih", True):
                         payload = row.to_dict()
-                        clean_payload = serialize_payload(payload)
+                        # Mapping might be needed if column names differ from save API expectation
+                        # Save API expects: Tanggal, Entitas, Judul, Isi, URL
+                        # Job results: date, entity, title, content, url
+
+                        # Remap
+                        mapped_payload = {
+                            "Tanggal": row.get("date"),
+                            "Entitas": row.get("entity"),
+                            "Judul": row.get("title"),
+                            "Isi": row.get("content"),
+                            "URL": row.get("url"),
+                            "Judul_Inggris": "",
+                            "Isi_Inggris": ""
+                        }
+
+                        clean_payload = serialize_payload(mapped_payload)
                         try:
                             requests.post(f"{api_url}/save", json=clean_payload)
                             count += 1

@@ -17,6 +17,8 @@ from transformers import pipeline
 from llama_index.core.node_parser import SentenceSplitter
 import os
 import gc
+import re
+from dateutil import parser as date_parser
 
 # FORCE Standard Event Loop Policy
 try:
@@ -116,6 +118,19 @@ def smart_translate(text):
     return " ".join(translated_parts)
 
 # --- Scraping Logic ---
+def find_date_in_text(text):
+    """Fallback to find date in text if metadata fails."""
+    if not text: return None
+    # YYYY-MM-DD
+    match = re.search(r'(\d{4})-(\d{2})-(\d{2})', text[:1000]) # Look in first 1000 chars
+    if match:
+        return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+    # DD-MM-YYYY or DD/MM/YYYY
+    match = re.search(r'(\d{2})[-/](\d{2})[-/](\d{4})', text[:1000])
+    if match:
+        return f"{match.group(3)}-{match.group(2)}-{match.group(1)}" # Convert to YYYY-MM-DD
+    return None
+
 async def extract_article_content_async(url):
     if not url: return None, None, None
     try:
@@ -133,7 +148,26 @@ async def extract_article_content_async(url):
             article.parse()
             
             pub_date = article.publish_date
-            pub_date_str = pub_date.strftime("%Y-%m-%d") if pub_date else None
+            pub_date_str = None
+
+            if pub_date:
+                pub_date_str = pub_date.strftime("%Y-%m-%d")
+            else:
+                # Fallback: Try metadata
+                if article.meta_data:
+                    # Common meta tags for date
+                    meta_date = article.meta_data.get('date') or article.meta_data.get('pubdate') or article.meta_data.get('publish_date')
+                    if meta_date:
+                        try:
+                            dt = date_parser.parse(str(meta_date))
+                            pub_date_str = dt.strftime("%Y-%m-%d")
+                        except:
+                            pass
+
+                # Fallback: Regex in text/html
+                if not pub_date_str:
+                    pub_date_str = find_date_in_text(result.html) # HTML is better for meta tags in header that Newspaper missed
+
             text = article.text if article.text and len(article.text) > 100 else result.markdown
             
             return article.title, text, pub_date_str
@@ -175,11 +209,13 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
         conn.close()
 
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
-        existing_urls = set(df_local["URL"].dropna().values) if not df_local.empty and "URL" in df_local.columns else set()
-
-        # Enhanced Deduplication: Check (Date, Title) signature
+        existing_urls = set()
         existing_signatures = set()
+
         if not df_local.empty:
+            if "URL" in df_local.columns:
+                 existing_urls = set(df_local["URL"].dropna().astype(str).values)
+
             for _, row in df_local.iterrows():
                 # Normalize title: strip + lower
                 t_sig = str(row.get('Judul', '')).strip().lower()
@@ -371,16 +407,34 @@ async def search_links(req: SearchLinksRequest):
         results = await asyncio.to_thread(search_duckduckgo, query, max_results=10)
 
         # Strict Filtering: Only return results that match the requested date
-        # DDGS usually returns 'date' in ISO format or similar
         filtered_results = []
+        req_date_obj = datetime.strptime(req.date, "%Y-%m-%d").date()
+
         for r in results:
-            d = r.get("date", "")
-            # If date exists, it MUST match
-            if d:
-                if str(d).startswith(req.date):
-                    filtered_results.append(r)
+            d_raw = r.get("date", "")
+            if d_raw:
+                try:
+                    # Parse the date from DDGS
+                    d_parsed = date_parser.parse(str(d_raw)).date()
+
+                    # Strict match: Must be equal
+                    if d_parsed == req_date_obj:
+                        filtered_results.append(r)
+                except:
+                    # If date is unparseable, we can't be sure.
+                    # User wants STRICT ("harus seacrh berdasarkan tanggal yg di berikan").
+                    # So if we have a date string but can't parse it to verify, maybe we should be careful?
+                    # But usually DDGS dates are parseable.
+                    # If we exclude it, we might miss data.
+                    # If we include it, we might include wrong data.
+                    # "bukan hasilnya menggunakan tanggal yg berbeda" -> imply if different, reject.
+                    # If unparseable, we don't know if it is different.
+                    # Use "keep" policy for unparseable?
+                    # Let's check if the raw string contains the date substring.
+                    if req.date in str(d_raw):
+                         filtered_results.append(r)
             else:
-                # If date is missing/unsure, keep it (User: "if you not sure... insert data")
+                # No date provided by DDGS -> Keep it
                 filtered_results.append(r)
 
         return filtered_results
