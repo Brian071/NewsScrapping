@@ -5,9 +5,11 @@ import os
 from datetime import datetime
 
 # Configuration
-# If running in Colab with Drive mounted, we prefer to store DB there.
 COLAB_DRIVE_PATH = "/content/drive/MyDrive/AutoNews_DB"
 LOCAL_DB_NAME = "app.db"
+
+# Global cache for DB path to avoid repeated print statements
+_cached_db_path = None
 
 def get_db_path():
     """
@@ -16,6 +18,10 @@ def get_db_path():
     2. If yes, creates/uses a folder 'AutoNews_DB' and stores app.db there.
     3. If no, uses local 'app.db'.
     """
+    global _cached_db_path
+    if _cached_db_path:
+        return _cached_db_path
+
     if os.path.exists("/content/drive/MyDrive"):
         # We are likely in Colab with Drive mounted
         if not os.path.exists(COLAB_DRIVE_PATH):
@@ -24,21 +30,28 @@ def get_db_path():
                 print(f"Created Database Folder in Drive: {COLAB_DRIVE_PATH}")
             except Exception as e:
                 print(f"Warning: Could not create folder in Drive ({e}). Using local DB.")
+                _cached_db_path = LOCAL_DB_NAME
                 return LOCAL_DB_NAME
 
         db_path = os.path.join(COLAB_DRIVE_PATH, "app.db")
         print(f"Using Google Drive Database: {db_path}")
+        _cached_db_path = db_path
         return db_path
     else:
         # Local environment
         print(f"Using Local Database: {LOCAL_DB_NAME}")
+        _cached_db_path = LOCAL_DB_NAME
         return LOCAL_DB_NAME
 
 def get_conn():
     db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        print(f"DB Connect Error ({db_path}): {e}")
+        raise e
 
 def init_db():
     conn = get_conn()
@@ -58,7 +71,6 @@ def init_db():
     ''')
 
     # Table: Job Results (Articles)
-    # is_synced: 0 = False, 1 = True
     c.execute('''
         CREATE TABLE IF NOT EXISTS job_results (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,15 +100,6 @@ def create_job(job_id, status="queued", total=0, processed=0, action="Initializi
         INSERT INTO jobs (job_id, status, total, processed, created_at, current_action, msg)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (job_id, status, total, processed, time.time(), action, ""))
-
-    # Store parameters as JSON in 'msg' or a new column?
-    # Actually, we need to store the request params (start, end, entity, keywords).
-    # Since we can't easily change schema, let's append params to 'msg' as a JSON string for now
-    # OR create a new table 'job_params'.
-    # Let's rely on 'msg' being used for error messages and create a new column 'params' if possible.
-    # But for now, to avoid migration issues, let's create a separate table for params or just append column if not exists.
-    # Simpler: Create a new table job_params
-
     conn.commit()
     conn.close()
 
@@ -177,7 +180,6 @@ def get_job_results(job_id):
 
     results = []
     for r in rows:
-        # Convert to format expected by frontend/API
         results.append({
             "Pilih": True,
             "Tanggal": r["date"],
@@ -202,7 +204,6 @@ def mark_results_synced(result_ids):
     if not result_ids: return
     conn = get_conn()
     c = conn.cursor()
-    # Safely handle list of IDs
     placeholders = ','.join('?' * len(result_ids))
     sql = f'UPDATE job_results SET is_synced = 1 WHERE id IN ({placeholders})'
     c.execute(sql, result_ids)

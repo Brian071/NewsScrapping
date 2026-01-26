@@ -98,6 +98,9 @@ def job_polling_widget():
                 if total > 0:
                      progress = min(1.0, max(0.0, processed / total))
                      st.progress(progress)
+                else:
+                     st.progress(0) # Show 0% if total is 0 (Initializing)
+
                 st.write(f"Processed: {processed} / {total}")
 
                 current_action = job.get("current_action", "")

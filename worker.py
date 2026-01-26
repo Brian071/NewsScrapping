@@ -318,13 +318,22 @@ async def worker_loop():
     # Initialize DB (creates tables if needed)
     db_handler.init_db()
 
+    # Debug: Print DB Path once
+    print(f"Worker using DB: {db_handler.get_db_path()}")
+
+    loop_count = 0
     while True:
         try:
+            loop_count += 1
+            if loop_count % 30 == 0: # Print heartbeat every ~1 minute
+                print("Worker still alive, polling...")
+
             job_id = db_handler.get_next_queued_job()
             if job_id:
                 print(f"Picked up job: {job_id}")
                 params = db_handler.get_job_params(job_id)
                 job_type = params.get('job_type', 'batch_scrape')
+                print(f"Job Type: {job_type}, Params: {params}")
 
                 if job_type == 'batch_scrape':
                     await process_batch_scrape(job_id, params)
@@ -332,13 +341,16 @@ async def worker_loop():
                     await process_search_links(job_id, params)
                 elif job_type == 'scrape_url':
                     await process_scrape_url(job_id, params)
+                elif job_type == 'gap': # Handle 'gap' as batch_scrape
+                     await process_batch_scrape(job_id, params)
                 else:
                     print(f"Unknown job type: {job_type}")
-                    db_handler.update_job_status(job_id, "failed", "Unknown job type")
+                    db_handler.update_job_status(job_id, "failed", f"Unknown job type: {job_type}")
             else:
                 await asyncio.sleep(2) # Poll interval
         except Exception as e:
             print(f"Worker Loop Error: {e}")
+            traceback.print_exc()
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
