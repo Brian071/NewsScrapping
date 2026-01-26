@@ -45,13 +45,21 @@ def get_db_path():
 
 def get_conn():
     db_path = get_db_path()
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except Exception as e:
-        print(f"DB Connect Error ({db_path}): {e}")
-        raise e
+    # Retry mechanism for "database is locked" (common on Drive)
+    for i in range(5):
+        try:
+            conn = sqlite3.connect(db_path, timeout=30.0) # Increased timeout
+            conn.row_factory = sqlite3.Row
+            return conn
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) and i < 4:
+                time.sleep(1) # Wait and retry
+                continue
+            print(f"DB Connect Error ({db_path}): {e}")
+            raise e
+        except Exception as e:
+            print(f"DB Connect Error ({db_path}): {e}")
+            raise e
 
 def init_db():
     conn = get_conn()

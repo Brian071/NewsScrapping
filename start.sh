@@ -9,6 +9,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Install Playwright dependencies (Essential for Crawl4AI)
+echo "Installing Playwright Chromium..."
+playwright install chromium
+
 # Watchdog function for Worker
 run_worker() {
     while true; do

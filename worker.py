@@ -355,6 +355,15 @@ async def worker_loop():
 
 if __name__ == "__main__":
     try:
+        print("Worker Process Starting...")
+        # Check permissions
+        if os.path.exists("app.db") and not os.access("app.db", os.W_OK):
+             print("ERROR: app.db exists but is NOT writable.")
+
         asyncio.run(worker_loop())
     except KeyboardInterrupt:
         print("Worker stopped.")
+    except Exception as e:
+        print(f"CRITICAL WORKER CRASH: {e}")
+        traceback.print_exc()
+        raise e
