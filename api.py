@@ -127,15 +127,19 @@ async def extract_article_content_async(url):
             result = await crawler.arun(url=url, cache_mode=CacheMode.BYPASS)
             if not result.html: return "Error", "No HTML", None
             
-            article = Article(url)
-            article.set_html(result.html)
-            article.parse()
+            # Offload synchronous parsing to avoid blocking the loop
+            def parse_sync(html, url):
+                article = Article(url)
+                article.set_html(html)
+                article.parse()
+                return article.title, article.text, article.publish_date
+
+            t, txt, d = await asyncio.to_thread(parse_sync, result.html, url)
             
-            pub_date = article.publish_date
-            pub_date_str = pub_date.strftime("%Y-%m-%d") if pub_date else None
-            text = article.text if article.text and len(article.text) > 100 else result.markdown
+            pub_date_str = d.strftime("%Y-%m-%d") if d else None
+            text = txt if txt and len(txt) > 100 else result.markdown
             
-            return article.title, text, pub_date_str
+            return t, text, pub_date_str
     except Exception as e:
         print(f"Scrape Error {url}: {e}")
         return "Error", str(e), None
@@ -172,7 +176,8 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
 
         job_seen_urls = set()
         tasks = []
-        sem = asyncio.Semaphore(5)
+        # Lower semaphore to reduce CPU/RAM load on Colab
+        sem = asyncio.Semaphore(2)
 
         async def process_date(date_obj):
             async with sem:
@@ -198,6 +203,7 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                     job_seen_urls.add(url)
 
                     t, c, pub_date = await extract_article_content_async(url)
+
                     # Relaxed validation: Just need title and some content
                     if t and t != "Error":
                         found_any = True

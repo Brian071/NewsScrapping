@@ -35,7 +35,8 @@ api_url = st.sidebar.text_input("Backend API URL", value="http://localhost:8000"
 # --- Backend Health Check ---
 def check_backend_health(url):
     try:
-        r = requests.get(f"{url}/health", timeout=2)
+        # Increased timeout to 5s for stability
+        r = requests.get(f"{url}/health", timeout=5)
         return r.status_code == 200
     except:
         return False
