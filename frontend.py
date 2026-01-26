@@ -488,7 +488,8 @@ if app_mode == "📝 Input & Scraping":
                      # Normalize date
                      try:
                          if d_sig:
-                             dt = pd.to_datetime(d_sig, dayfirst=True)
+                             # Use errors='coerce' to handle mixed formats safely
+                             dt = pd.to_datetime(d_sig, dayfirst=True, errors='coerce')
                              if not pd.isna(dt):
                                  d_sig = dt.strftime("%Y-%m-%d")
                      except:
@@ -530,7 +531,8 @@ if app_mode == "📝 Input & Scraping":
                 # Normalize date
                 try:
                     if d:
-                        dt = pd.to_datetime(d, dayfirst=True)
+                        # Use errors='coerce' to handle mixed formats safely
+                        dt = pd.to_datetime(d, dayfirst=True, errors='coerce')
                         if not pd.isna(dt):
                             d = dt.strftime("%Y-%m-%d")
                 except:
