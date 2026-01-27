@@ -7,6 +7,14 @@ from gspread.utils import rowcol_to_a1
 # Default Spreadsheet ID provided by user
 DEFAULT_SPREADSHEET_ID = "1U8xeumDGJckZsTqIMyNr0DBfg0Bv9_IRpDV6XdN59Hw"
 
+# Import Config to override if needed
+try:
+    import config
+    if hasattr(config, 'SPREADSHEET_ID'):
+        DEFAULT_SPREADSHEET_ID = config.SPREADSHEET_ID
+except ImportError:
+    pass
+
 def get_creds():
     try:
         creds, _ = default()
@@ -93,12 +101,16 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
         row_values.append(str(val))
         
     try:
-        ws.append_row(row_values)
+        # Force USER_ENTERED to ensure strings are treated as such
+        print(f"DEBUG: Appending row to {worksheet_name}: {row_values[:2]}...")
+        ws.append_row(row_values, value_input_option='USER_ENTERED')
         return True
     except Exception as e:
+        print(f"ERROR: Append failed: {e}")
         if "Quota exceeded" in str(e):
+            print("Quota exceeded, retrying...")
             time.sleep(2)
-            ws.append_row(row_values)
+            ws.append_row(row_values, value_input_option='USER_ENTERED')
             return True
         raise e
 

@@ -334,9 +334,19 @@ if app_mode == "📝 Input & Scraping":
                                     st.error(f"Error saving row {index}: {e}")
 
                         st.success(f"Successfully saved {count} rows!")
+
+                        # Verify Save
+                        try:
+                            df_verify = gsheet_handler.read_sheet_to_df()
+                            if not df_verify.empty:
+                                last_row = df_verify.iloc[-1]
+                                st.info(f"Verification - Last Saved Row: {last_row['Judul']}")
+                            else:
+                                st.warning("Verification Warning: Sheet appears empty after save.")
+                        except Exception as e:
+                            st.error(f"Verification Failed: {e}")
+
                         time.sleep(2)
-                        # Optionally clear after save? User might want to keep it.
-                        # Let's keep it but show success.
                 else:
                     st.warning("No data to save.")
 
