@@ -503,29 +503,20 @@ elif app_mode == "🔄 Translator":
             if st.button("Translate Selected"):
                 to_proc = edited[edited["Pilih"] == True]
                 if not to_proc.empty:
-                    with st.spinner("Translating..."):
-                        translator_utils.load_model()
-                        count = 0
-                        for idx, row in to_proc.iterrows():
-                            old_title = row['Judul']
-                            updated = {}
-                            if not row['Judul_Inggris']:
-                                updated['Judul_Inggris'] = translator_utils.smart_translate(old_title)
-                            if not row['Isi_Inggris']:
-                                updated['Isi_Inggris'] = translator_utils.smart_translate(row['Isi'])
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
 
-                            if updated:
-                                try:
-                                    gsheet_handler.update_row_in_sheet(
-                                        row['Tanggal'], row['Entitas'], old_title, updated
-                                    )
-                                    count += 1
-                                except Exception as e:
-                                    st.error(f"Failed to update {old_title}: {e}")
+                    def update_progress(val, desc=""):
+                        progress_bar.progress(val)
+                        status_text.text(desc)
 
-                        st.success(f"Translated {count} articles.")
+                    try:
+                        _, msg = translator_utils.process_rows(to_proc, progress=update_progress)
+                        st.success(msg)
                         time.sleep(1)
                         st.rerun()
+                    except Exception as e:
+                        st.error(f"Translation failed: {e}")
 
     with tab2:
         if not df.empty and 'Judul_Inggris' in df.columns:
