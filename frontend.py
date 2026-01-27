@@ -11,6 +11,7 @@ import uuid
 import gsheet_handler
 import translator_utils
 import scraper_lib
+import config # Load configuration
 
 # Force default loop policy for Colab stability
 try:
@@ -304,17 +305,39 @@ if app_mode == "📝 Input & Scraping":
 
         if not st.session_state.batch_results.empty:
             st.divider()
-            st.write(f"### 📥 Scraped Results ({len(st.session_state.batch_results)})")
+            st.write(f"### 📥 Review Results ({len(st.session_state.batch_results)})")
 
-            c_clear, _ = st.columns([1, 5])
-            if c_clear.button("🗑️ Clear Results & Temp"):
+            c_clear, c_save, _ = st.columns([1, 2, 4])
+
+            if c_clear.button("🗑️ Clear Results"):
                 st.session_state.batch_results = pd.DataFrame()
                 if os.path.exists(TEMP_RESULTS_FILE):
                     os.remove(TEMP_RESULTS_FILE)
                 st.rerun()
 
-            st.data_editor(st.session_state.batch_results)
-            st.info("Results have been automatically saved to Google Sheets and cached locally.")
+            # Editor
+            edited_df = st.data_editor(st.session_state.batch_results, num_rows="dynamic", key="batch_editor")
+
+            # Save Button (Manual)
+            if c_save.button("💾 Save Verified to Sheet"):
+                if not edited_df.empty:
+                    with st.spinner("Saving to Google Sheets..."):
+                        count = 0
+                        for index, row in edited_df.iterrows():
+                            # Only save if title exists (basic validation)
+                            if row.get("Judul"):
+                                try:
+                                    gsheet_handler.append_to_sheet(row.to_dict())
+                                    count += 1
+                                except Exception as e:
+                                    st.error(f"Error saving row {index}: {e}")
+
+                        st.success(f"Successfully saved {count} rows!")
+                        time.sleep(2)
+                        # Optionally clear after save? User might want to keep it.
+                        # Let's keep it but show success.
+                else:
+                    st.warning("No data to save.")
 
     # --- 3. GAP FILLER ---
     elif sub_page == "Gap Filler (Manual Scrape)":

@@ -4,7 +4,12 @@ import gc
 import re
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
-from duckduckgo_search import DDGS
+# Handle DDGS import warning
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
+
 from newspaper import Article
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
 import gsheet_handler
@@ -172,13 +177,8 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                     }
                     results_list.append(item)
 
-                    # 1. Save to GSheet (Persist Remote)
-                    try:
-                        gsheet_handler.append_to_sheet(item)
-                    except:
-                        pass
-
-                    # 2. Save to Temp File (Persist Local / Session Recovery)
+                    # 1. Save to Temp File (Persist Local / Session Recovery)
+                    # We do NOT save to GSheet automatically anymore (User Request: "Manual Check")
                     try:
                         # Append to JSONL file
                         with open(TEMP_RESULTS_FILE, "a") as f:
