@@ -277,8 +277,11 @@ if app_mode == "📝 Input & Scraping":
         start = c1.date_input("Start")
         end = c2.date_input("End")
         entity = c3.selectbox("Entity", ["AirAsia", "Garuda Indonesia"], key="batch_ent")
-        kw = st.text_input("Keywords")
         
+        c4, c5 = st.columns(2)
+        kw = c4.text_input("Keywords")
+        region = c5.selectbox("Search Region", ["wt-wt (Global)", "id-id (Indonesia)"], index=0)
+
         status_box = st.empty()
         progress_bar = st.empty()
 
@@ -294,8 +297,10 @@ if app_mode == "📝 Input & Scraping":
                     if total > 0:
                         progress_bar.progress(min(1.0, current/total))
 
+                # Extract region code
+                reg_code = region.split(" ")[0]
                 results = asyncio.run(scraper_lib.run_batch_scrape(
-                    str(start), str(end), entity, kw, update_progress
+                    str(start), str(end), entity, kw, update_progress, region=reg_code
                 ))
 
                 if results:

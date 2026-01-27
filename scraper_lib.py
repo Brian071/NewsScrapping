@@ -15,6 +15,8 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
 import gsheet_handler
 import json
 import os
+import time
+import random
 
 # Enable nest_asyncio
 try:
@@ -84,21 +86,33 @@ async def extract_article_content_async(url):
         print(f"Scrape Error {url}: {e}")
         return "Error", str(e), None
 
-def search_duckduckgo(query, max_results=5):
+def search_duckduckgo(query, max_results=5, region="wt-wt"):
     results = []
-    try:
-        with DDGS() as ddgs:
-            # Changed region to 'wt-wt' (World) to include international news
-            ddgs_gen = ddgs.news(query, region="wt-wt", safesearch="off", max_results=max_results)
-            for r in ddgs_gen:
-                results.append(r)
-    except Exception as e:
-        print(f"DDGS Error: {e}")
+    max_retries = 3
+
+    for attempt in range(max_retries):
+        try:
+            # Respect rate limits
+            time.sleep(random.uniform(2, 5))
+
+            with DDGS() as ddgs:
+                ddgs_gen = ddgs.news(query, region=region, safesearch="off", max_results=max_results)
+                for r in ddgs_gen:
+                    results.append(r)
+            break # Success, exit retry loop
+
+        except Exception as e:
+            print(f"DDGS Error (Attempt {attempt+1}): {e}")
+            if "content-length of 0" in str(e) or "No results" in str(e):
+                time.sleep(5) # Wait longer on specific errors
+            else:
+                time.sleep(2)
+
     return results
 
 # --- Main Logic with Callbacks ---
 
-async def run_batch_scrape(start_date, end_date, entity, keywords, progress_callback):
+async def run_batch_scrape(start_date, end_date, entity, keywords, progress_callback, region="wt-wt"):
     """
     Directly runs the batch scrape and updates UI via callback.
     callback(processed_count, total_count, status_message)
@@ -164,7 +178,10 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
             progress_callback(processed, delta, f"Searching {date_str}...")
 
             query = f"{entity} {keywords} {date_str}"
-            search_res = await asyncio.to_thread(search_duckduckgo, query)
+
+            # Pass region if available in params (TODO: Add to run_batch_scrape signature later)
+            # For now, default to wt-wt or use global config logic if implemented.
+            search_res = await asyncio.to_thread(search_duckduckgo, query, region=region)
 
             for res in search_res:
                 url = res.get('url')
@@ -225,7 +242,7 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
 
 async def run_search_links(date, entity, keywords):
     query = f"{entity} {keywords} {date}"
-    results = await asyncio.to_thread(search_duckduckgo, query, max_results=10)
+    results = await asyncio.to_thread(search_duckduckgo, query, max_results=10, region="wt-wt")
 
     filtered = []
     try:
