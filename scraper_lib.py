@@ -26,6 +26,15 @@ except Exception:
 
 TEMP_RESULTS_FILE = "temp_scrape_results.json"
 
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/114.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+]
+
 # --- Core Scraper Functions ---
 
 def find_date_in_text(text):
@@ -90,23 +99,55 @@ def search_duckduckgo(query, max_results=5, region="wt-wt"):
     results = []
     max_retries = 3
 
-    for attempt in range(max_retries):
-        try:
-            # Respect rate limits
-            time.sleep(random.uniform(2, 5))
+    # Try 'news' first with API backend, then fallback to 'text' (general search) with html backend
+    methods = [("news", None), ("text", "html")]
 
-            with DDGS() as ddgs:
-                ddgs_gen = ddgs.news(query, region=region, safesearch="off", max_results=max_results)
-                for r in ddgs_gen:
-                    results.append(r)
-            break # Success, exit retry loop
+    for method, backend in methods:
+        # If we already have results from a previous method, stop.
+        if results: break
 
-        except Exception as e:
-            print(f"DDGS Error (Attempt {attempt+1}): {e}")
-            if "content-length of 0" in str(e) or "No results" in str(e):
-                time.sleep(5) # Wait longer on specific errors
-            else:
-                time.sleep(2)
+        for attempt in range(max_retries):
+            try:
+                # Respect rate limits - Jitter
+                time.sleep(random.uniform(3, 8))
+
+                ua = random.choice(USER_AGENTS)
+                print(f"DEBUG: Searching '{query}' (Method: {method}, Backend: {backend}, Attempt: {attempt+1})")
+
+                # Try to pass headers if supported by installed version
+                try:
+                    ddgs_instance = DDGS(headers={"User-Agent": ua}, timeout=20)
+                except TypeError:
+                    ddgs_instance = DDGS(timeout=20)
+
+                with ddgs_instance as ddgs:
+                    if method == "news":
+                        ddgs_gen = ddgs.news(query, region=region, safesearch="off", max_results=max_results)
+                    else:
+                        # Fallback to general text search which allows backend='html' (often less strict)
+                        # We need to normalize output to match news format (url, title, date)
+                        ddgs_gen = []
+                        # Note: text() returns 'href', 'title', 'body'
+                        raw_res = ddgs.text(query, region=region, safesearch="off", max_results=max_results, backend=backend)
+                        for r in raw_res:
+                            # Remap to news-like structure
+                            ddgs_gen.append({
+                                "url": r.get("href"),
+                                "title": r.get("title"),
+                                "body": r.get("body"),
+                                "date": "", # No date in text search usually
+                                "source": ""
+                            })
+
+                    for r in ddgs_gen:
+                        results.append(r)
+
+                if results:
+                    break # Success for this method
+
+            except Exception as e:
+                print(f"DDGS Error ({method}, Attempt {attempt+1}): {e}")
+                time.sleep(random.uniform(5, 10))
 
     return results
 

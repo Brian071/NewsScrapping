@@ -34,6 +34,8 @@ st.sidebar.info("Running in Direct Mode (Synchronous)")
 # --- Session State ---
 if 'batch_results' not in st.session_state:
     st.session_state.batch_results = pd.DataFrame()
+if 'gap_results' not in st.session_state:
+    st.session_state.gap_results = pd.DataFrame()
 
 # Import JSON/OS here if not already imported (but python handles duplicate imports)
 import json
@@ -382,12 +384,43 @@ if app_mode == "📝 Input & Scraping":
                 ))
 
                 if results:
-                    # Append to session state for Review
-                    # Actually run_batch_scrape autosaves.
-                    st.success(f"Found and saved {len(results)} articles.")
-                    st.dataframe(pd.DataFrame(results))
+                    st.session_state.gap_results = pd.DataFrame(results)
+                    st.success(f"Found {len(results)} articles. Please review and save below.")
                 else:
                     st.warning("No new articles found.")
+
+        if not st.session_state.gap_results.empty:
+            st.divider()
+            st.write(f"### 📥 Review Results ({len(st.session_state.gap_results)})")
+
+            c_clear, c_save, _ = st.columns([1, 2, 4])
+
+            if c_clear.button("🗑️ Clear Results", key="gap_clear"):
+                st.session_state.gap_results = pd.DataFrame()
+                st.rerun()
+
+            # Editor
+            edited_gap_df = st.data_editor(st.session_state.gap_results, num_rows="dynamic", key="gap_editor")
+
+            # Save Button (Manual)
+            if c_save.button("💾 Save Verified to Sheet", key="gap_save"):
+                if not edited_gap_df.empty:
+                    with st.spinner("Saving to Google Sheets..."):
+                        count = 0
+                        for index, row in edited_gap_df.iterrows():
+                            if row.get("Judul"):
+                                try:
+                                    gsheet_handler.append_to_sheet(row.to_dict())
+                                    count += 1
+                                except Exception as e:
+                                    st.error(f"Error saving row {index}: {e}")
+
+                        st.success(f"Successfully saved {count} rows!")
+                        time.sleep(2)
+                        st.session_state.gap_results = pd.DataFrame() # Clear after save? Or keep?
+                        st.rerun()
+                else:
+                    st.warning("No data to save.")
 
     # --- 4. MONITOR ---
     elif sub_page == "Monitor Data":
