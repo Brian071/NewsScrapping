@@ -45,8 +45,6 @@ def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita")
                 print(f"Worksheet '{worksheet_name}' not found. Falling back to the first sheet (gid=0).")
                 try:
                     ws = sh.get_worksheet(0)
-                    # Verify headers? Or just assume user knows what they are doing.
-                    # Let's ensure headers exist on the fallback sheet.
                     headers = ws.row_values(1)
                     if not headers:
                          ws.append_row(["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
@@ -63,8 +61,6 @@ def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita")
             if worksheet_name == "log_kosong":
                 ws.append_row(["Tanggal", "Entitas", "Alasan", "Timestamp"])
             else:
-                # Default for data_berita
-                # Added URL for verification and duplicate checking
                 ws.append_row(["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
             return ws
             
@@ -73,9 +69,7 @@ def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita")
 
 def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita"):
     try:
-        # Default to index 0 if not specified name, but prefer name
         target_name = worksheet_name if isinstance(worksheet_name, str) else "data_berita"
-        
         ws = get_worksheet(sheet_id, target_name)
         data = ws.get_all_records()
         
@@ -83,11 +77,13 @@ def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berit
         
         df = pd.DataFrame(data)
         
-        # Ensure standard columns exist for MAIN sheet only
+        # Normalize DataFrame Columns: Strip whitespace
+        if not df.empty:
+            df.columns = [str(c).strip() for c in df.columns]
+
         if target_name == "data_berita":
             required_columns = ["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"]
             
-            # If empty or missing columns
             if df.empty:
                 df = pd.DataFrame(columns=required_columns)
             else:
@@ -95,7 +91,6 @@ def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berit
                     if col not in df.columns:
                         df[col] = ""
         
-        # Ensure all data is string
         df = df.astype(str)
         return df
     except Exception as e:
@@ -103,6 +98,35 @@ def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berit
         return pd.DataFrame()
 
 def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita"):
+    # 1. Content Chunking (Handle >45k chars)
+    # Check "Isi" (Indonesian) and "Isi_Inggris" (English)
+    for col_check in ["Isi", "Isi_Inggris"]:
+        content = str(row_data.get(col_check, ""))
+        if len(content) > 45000:
+            print(f"DEBUG: Content in '{col_check}' exceeds 45k chars ({len(content)}). Splitting...")
+
+            # Split into chunks of 45000
+            chunk_size = 45000
+            parts = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
+
+            base_title = row_data.get("Judul", "")
+            base_url = row_data.get("URL", "")
+            last_sheet_name = ""
+
+            for i, part in enumerate(parts):
+                new_row = row_data.copy()
+                new_row[col_check] = part # Overwrite with chunk
+
+                if i > 0:
+                    new_row["Judul"] = f"{base_title} (Part {i+1})"
+                    new_row["URL"] = f"{base_url}#part{i+1}"
+
+                # Recursive call with the modified row (which now has <45k chars in this column)
+                last_sheet_name = append_to_sheet(new_row, sheet_id, worksheet_name)
+                time.sleep(1)
+
+            return last_sheet_name
+
     ws = get_worksheet(sheet_id, worksheet_name)
     headers = ws.row_values(1)
     
@@ -110,14 +134,25 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
         headers = list(row_data.keys())
         ws.append_row(headers)
     
+    # 2. Fuzzy Header Matching
+    # Normalize input keys: "Judul" -> "judul"
+    data_map = {k.strip().lower(): v for k, v in row_data.items()}
+
     row_values = []
+
+    # Debug info to help diagnose mismatch
+    print(f"DEBUG: Sheet Headers: {headers}")
+    # print(f"DEBUG: Input Keys: {list(row_data.keys())}")
+
     for h in headers:
-        val = row_data.get(h, "")
+        h_norm = str(h).strip().lower()
+
+        # Look for value using normalized key
+        val = data_map.get(h_norm, "")
         row_values.append(str(val))
         
     try:
-        # Force USER_ENTERED to ensure strings are treated as such
-        print(f"DEBUG: Appending row to {ws.title}: {row_values[:2]}...")
+        # print(f"DEBUG: Appending row to {ws.title}. First col: {row_values[0] if row_values else 'Empty'}")
         ws.append_row(row_values, value_input_option='USER_ENTERED')
         return ws.title
     except Exception as e:
@@ -181,16 +216,24 @@ def bulk_append(df_batch, sheet_id=DEFAULT_SPREADSHEET_ID):
     headers = ws.row_values(1)
     
     if not headers and not df_batch.empty:
-        # Initialize headers if completely empty
         headers = df_batch.columns.tolist()
         ws.append_row(headers)
     
+    # Normalize headers map
+    header_indices = {str(h).strip().lower(): i for i, h in enumerate(headers)}
+
     rows_to_append = []
     for _, row in df_batch.iterrows():
-        row_vals = []
-        for h in headers:
-            val = row.get(h, "")
-            row_vals.append(str(val))
+        # Create a blank row of empty strings
+        row_vals = [""] * len(headers)
+
+        # Fill in values based on fuzzy matching
+        for k, v in row.items():
+            k_norm = str(k).strip().lower()
+            if k_norm in header_indices:
+                idx = header_indices[k_norm]
+                row_vals[idx] = str(v)
+
         rows_to_append.append(row_vals)
         
     if rows_to_append:
@@ -206,10 +249,8 @@ def bulk_append(df_batch, sheet_id=DEFAULT_SPREADSHEET_ID):
 # --- Log Specific Functions ---
 
 def log_empty_date(date, entity, reason="Manual Pass", sheet_id=DEFAULT_SPREADSHEET_ID):
-    # Check for duplicates first
     df = read_sheet_to_df(sheet_id, "log_kosong")
     if not df.empty:
-        # Check if Date + Entity already exists
         exists = df[(df['Tanggal'] == str(date)) & (df['Entitas'] == str(entity))]
         if not exists.empty:
             print(f"Log for {date} {entity} already exists. Skipping duplicate log.")

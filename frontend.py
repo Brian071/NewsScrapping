@@ -364,7 +364,9 @@ if app_mode == "📝 Input & Scraping":
                                         st.success(f"✅ Verified: '{last_saved_title}' found in sheet.")
                                     else:
                                         st.error(f"❌ Verification FAILED: '{last_saved_title}' NOT found in last 10 rows of '{last_sheet_name}'.")
-                                        st.write("Recent rows:", recent_titles)
+                                        st.write(f"Sheet Headers Detected: {df_verify.columns.tolist()}")
+                                        st.write("Recent rows found:", recent_titles)
+                                        st.warning("Possible Cause: Sheet headers might have spaces/typos, or data was saved to a different sheet.")
                                 else:
                                     st.warning("Verification Warning: Sheet appears empty after save.")
                             except Exception as e:
@@ -455,7 +457,8 @@ if app_mode == "📝 Input & Scraping":
                                         st.success(f"✅ Verified: '{last_saved_title}' found in sheet.")
                                     else:
                                         st.error(f"❌ Verification FAILED: '{last_saved_title}' NOT found in last 10 rows.")
-                                        st.write("Recent rows:", recent_titles)
+                                        st.write(f"Sheet Headers Detected: {df_verify.columns.tolist()}")
+                                        st.write("Recent rows found:", recent_titles)
                             except Exception as e:
                                 st.error(f"Verification Check Failed: {e}")
 
