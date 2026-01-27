@@ -189,6 +189,7 @@ if app_mode == "📝 Input & Scraping":
             else:
                 filled_dates = set()
 
+            skipped_dates = set()
             if not df_logs.empty and 'Tanggal' in df_logs.columns:
                  df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', dayfirst=True)
                  mask_logs = (df_logs['Tanggal'].dt.year == year) & \

@@ -328,6 +328,16 @@ async def worker_loop():
             if loop_count % 30 == 0: # Print heartbeat every ~1 minute
                 print("Worker still alive, polling...")
 
+            # Debug: Check queue count every ~10 seconds
+            if loop_count % 5 == 0:
+                conn = db_handler.get_conn()
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM jobs WHERE status = "queued"')
+                cnt = cursor.fetchone()[0]
+                conn.close()
+                if cnt > 0:
+                    print(f"DEBUG: Found {cnt} queued jobs in DB.")
+
             job_id = db_handler.get_next_queued_job()
             if job_id:
                 print(f"Picked up job: {job_id}")
