@@ -88,7 +88,8 @@ def search_duckduckgo(query, max_results=5):
     results = []
     try:
         with DDGS() as ddgs:
-            ddgs_gen = ddgs.news(query, region="id-id", safesearch="off", max_results=max_results)
+            # Changed region to 'wt-wt' (World) to include international news
+            ddgs_gen = ddgs.news(query, region="wt-wt", safesearch="off", max_results=max_results)
             for r in ddgs_gen:
                 results.append(r)
     except Exception as e:

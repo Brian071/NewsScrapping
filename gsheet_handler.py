@@ -26,6 +26,7 @@ def get_creds():
 def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita"):
     """
     Safely retrieve or create a worksheet by name.
+    If worksheet_name is 'data_berita' but does not exist, it tries to use the first sheet (index 0).
     """
     creds = get_creds()
     if not creds:
@@ -39,6 +40,20 @@ def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita")
         try:
             return sh.worksheet(worksheet_name)
         except gspread.WorksheetNotFound:
+            # Fallback: If expecting main data but not found, try the first visible sheet
+            if worksheet_name == "data_berita":
+                print(f"Worksheet '{worksheet_name}' not found. Falling back to the first sheet (gid=0).")
+                try:
+                    ws = sh.get_worksheet(0)
+                    # Verify headers? Or just assume user knows what they are doing.
+                    # Let's ensure headers exist on the fallback sheet.
+                    headers = ws.row_values(1)
+                    if not headers:
+                         ws.append_row(["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
+                    return ws
+                except Exception as ex:
+                    print(f"Fallback to first sheet failed: {ex}")
+
             print(f"Worksheet '{worksheet_name}' not found. Creating it...")
             
             # Create new sheet
