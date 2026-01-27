@@ -8,12 +8,16 @@ from duckduckgo_search import DDGS
 from newspaper import Article
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode
 import gsheet_handler
+import json
+import os
 
 # Enable nest_asyncio
 try:
     nest_asyncio.apply()
 except Exception:
     pass
+
+TEMP_RESULTS_FILE = "temp_scrape_results.json"
 
 # --- Core Scraper Functions ---
 
@@ -168,13 +172,19 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                     }
                     results_list.append(item)
 
-                    # Optional: Incremental Save to Sheet?
-                    # Or just return all at end? User might want immediate results.
-                    # Let's save individually or in small batches.
+                    # 1. Save to GSheet (Persist Remote)
                     try:
                         gsheet_handler.append_to_sheet(item)
                     except:
                         pass
+
+                    # 2. Save to Temp File (Persist Local / Session Recovery)
+                    try:
+                        # Append to JSONL file
+                        with open(TEMP_RESULTS_FILE, "a") as f:
+                            f.write(json.dumps(item) + "\n")
+                    except Exception as e:
+                        print(f"Failed to save temp result: {e}")
 
             processed += 1
             progress_callback(processed, delta, f"Completed {date_str}")

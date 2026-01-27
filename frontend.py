@@ -34,6 +34,26 @@ st.sidebar.info("Running in Direct Mode (Synchronous)")
 if 'batch_results' not in st.session_state:
     st.session_state.batch_results = pd.DataFrame()
 
+# Import JSON/OS here if not already imported (but python handles duplicate imports)
+import json
+import os
+
+# Check for temp results on load
+TEMP_RESULTS_FILE = "temp_scrape_results.json"
+
+if os.path.exists(TEMP_RESULTS_FILE) and st.session_state.batch_results.empty:
+    try:
+        data = []
+        with open(TEMP_RESULTS_FILE, "r") as f:
+            for line in f:
+                if line.strip():
+                    data.append(json.loads(line))
+        if data:
+            st.session_state.batch_results = pd.DataFrame(data)
+            st.toast(f"Restored {len(data)} items from previous session.")
+    except Exception as e:
+        print(f"Failed to load temp results: {e}")
+
 # --- Helper Functions ---
 def get_data():
     try:
@@ -286,12 +306,15 @@ if app_mode == "📝 Input & Scraping":
             st.divider()
             st.write(f"### 📥 Scraped Results ({len(st.session_state.batch_results)})")
 
-            if st.button("🗑️ Clear Results"):
+            c_clear, _ = st.columns([1, 5])
+            if c_clear.button("🗑️ Clear Results & Temp"):
                 st.session_state.batch_results = pd.DataFrame()
+                if os.path.exists(TEMP_RESULTS_FILE):
+                    os.remove(TEMP_RESULTS_FILE)
                 st.rerun()
 
             st.data_editor(st.session_state.batch_results)
-            st.info("Results have been automatically saved.")
+            st.info("Results have been automatically saved to Google Sheets and cached locally.")
 
     # --- 3. GAP FILLER ---
     elif sub_page == "Gap Filler (Manual Scrape)":
