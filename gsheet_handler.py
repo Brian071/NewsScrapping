@@ -135,7 +135,7 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
 
             base_title = row_data.get("Judul", "")
             base_url = row_data.get("URL", "")
-            last_sheet_name = ""
+            last_status = ""
 
             for i, part in enumerate(parts):
                 new_row = row_data.copy()
@@ -145,10 +145,13 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
                     new_row["Judul"] = f"{base_title} (Part {i+1})"
                     new_row["URL"] = f"{base_url}#part{i+1}"
 
-                last_sheet_name = append_to_sheet(new_row, sheet_id, worksheet_name)
+                # Recursive call with the modified row (which now has <45k chars in this column)
+                # IMPORTANT: Pass the original 'worksheet_name', NOT the return value (which is a status string)
+                last_status = append_to_sheet(new_row, sheet_id, worksheet_name)
                 time.sleep(1)
 
-            return last_sheet_name
+            # Return the status of the *last* chunk saved (usually sufficient)
+            return last_status
 
     ws = get_worksheet(sheet_id, worksheet_name)
     headers = ws.row_values(1)
