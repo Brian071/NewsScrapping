@@ -288,8 +288,9 @@ if app_mode == "📝 Input & Scraping":
             else:
                 progress_bar.progress(0)
 
+                # Callback wrapper to handle UI updates safely
                 def update_progress(current, total, msg):
-                    status_box.text(f"{msg} ({current}/{total})")
+                    status_box.markdown(f"**{msg}**") # Markdown for bold warnings
                     if total > 0:
                         progress_bar.progress(min(1.0, current/total))
 

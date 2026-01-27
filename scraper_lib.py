@@ -112,24 +112,42 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
         progress_callback(0, delta, f"Initializing scrape for {entity}...")
 
         # Load existing data for deduplication
+        progress_callback(0, delta, "Loading dataset for deduplication...")
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
+
         existing_urls = set()
         existing_signatures = set()
+        existing_titles = set()
 
         if not df_local.empty:
+            count_loaded = len(df_local)
+            progress_callback(0, delta, f"Loaded {count_loaded} records for deduplication.")
+
             if "URL" in df_local.columns:
-                 existing_urls = set(df_local["URL"].dropna().astype(str).values)
+                 # Normalize URL: strip query params? For now just strip whitespace
+                 existing_urls = set(df_local["URL"].dropna().astype(str).str.strip().values)
 
             for _, row in df_local.iterrows():
-                t_sig = str(row.get('Judul', '')).strip().lower()
+                t_raw = str(row.get('Judul', ''))
+                t_sig = t_raw.strip().lower()
+
+                # Store simple title signature for pre-scrape check
+                if t_sig:
+                    existing_titles.add(t_sig)
+
                 d_sig_raw = str(row.get('Tanggal', '')).strip()
+                d_sig = d_sig_raw
                 try:
+                    # Normalize date to YYYY-MM-DD
                     d_parsed = date_parser.parse(d_sig_raw)
                     d_sig = d_parsed.strftime("%Y-%m-%d")
                 except:
                     pass
+
                 if t_sig and d_sig:
                     existing_signatures.add((d_sig, t_sig))
+        else:
+            progress_callback(0, delta, "⚠️ Warning: Dataset empty or failed to load. Duplicates will NOT be filtered.")
 
         job_seen_urls = set()
 
@@ -150,8 +168,16 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
             for res in search_res:
                 url = res.get('url')
                 if not url: continue
-                if url in existing_urls: continue
+
+                # 1. URL Check
+                if url.strip() in existing_urls:
+                    continue
                 if url in job_seen_urls: continue
+
+                # 2. Pre-Scrape Title Check (if available from search result)
+                search_title = res.get('title', '').strip().lower()
+                if search_title and search_title in existing_titles:
+                    continue
 
                 job_seen_urls.add(url)
 
