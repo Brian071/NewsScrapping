@@ -331,27 +331,46 @@ if app_mode == "📝 Input & Scraping":
                 if not edited_df.empty:
                     with st.spinner("Saving to Google Sheets..."):
                         count = 0
+                        last_sheet_name = "Unknown"
+                        last_saved_title = ""
+
                         for index, row in edited_df.iterrows():
                             # Only save if title exists (basic validation)
                             if row.get("Judul"):
                                 try:
-                                    gsheet_handler.append_to_sheet(row.to_dict())
+                                    # Strict String Conversion
+                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
+
+                                    # Append and get sheet name
+                                    last_sheet_name = gsheet_handler.append_to_sheet(payload)
+                                    last_saved_title = payload.get("Judul")
                                     count += 1
                                 except Exception as e:
                                     st.error(f"Error saving row {index}: {e}")
 
-                        st.success(f"Successfully saved {count} rows!")
+                        if count > 0:
+                            st.success(f"Successfully saved {count} rows to '{last_sheet_name}'!")
 
-                        # Verify Save
-                        try:
-                            df_verify = gsheet_handler.read_sheet_to_df()
-                            if not df_verify.empty:
-                                last_row = df_verify.iloc[-1]
-                                st.info(f"Verification - Last Saved Row: {last_row['Judul']}")
-                            else:
-                                st.warning("Verification Warning: Sheet appears empty after save.")
-                        except Exception as e:
-                            st.error(f"Verification Failed: {e}")
+                            # Strict Verification
+                            try:
+                                time.sleep(1.5) # Wait for API propagation
+                                df_verify = gsheet_handler.read_sheet_to_df(worksheet_name=last_sheet_name)
+
+                                if not df_verify.empty:
+                                    # Check if the LAST saved title is actually present in the last 10 rows
+                                    recent_titles = df_verify.tail(10)["Judul"].astype(str).tolist()
+
+                                    if last_saved_title in recent_titles:
+                                        st.success(f"✅ Verified: '{last_saved_title}' found in sheet.")
+                                    else:
+                                        st.error(f"❌ Verification FAILED: '{last_saved_title}' NOT found in last 10 rows of '{last_sheet_name}'.")
+                                        st.write("Recent rows:", recent_titles)
+                                else:
+                                    st.warning("Verification Warning: Sheet appears empty after save.")
+                            except Exception as e:
+                                st.error(f"Verification Check Failed: {e}")
+                        else:
+                             st.warning("No valid rows saved.")
 
                         time.sleep(2)
                 else:
@@ -407,17 +426,41 @@ if app_mode == "📝 Input & Scraping":
                 if not edited_gap_df.empty:
                     with st.spinner("Saving to Google Sheets..."):
                         count = 0
+                        last_sheet_name = "Unknown"
+                        last_saved_title = ""
+
                         for index, row in edited_gap_df.iterrows():
                             if row.get("Judul"):
                                 try:
-                                    gsheet_handler.append_to_sheet(row.to_dict())
+                                    # Strict String Conversion
+                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
+
+                                    last_sheet_name = gsheet_handler.append_to_sheet(payload)
+                                    last_saved_title = payload.get("Judul")
                                     count += 1
                                 except Exception as e:
                                     st.error(f"Error saving row {index}: {e}")
 
-                        st.success(f"Successfully saved {count} rows!")
+                        if count > 0:
+                            st.success(f"Successfully saved {count} rows to '{last_sheet_name}'!")
+
+                            # Strict Verification
+                            try:
+                                time.sleep(1.5)
+                                df_verify = gsheet_handler.read_sheet_to_df(worksheet_name=last_sheet_name)
+
+                                if not df_verify.empty:
+                                    recent_titles = df_verify.tail(10)["Judul"].astype(str).tolist()
+                                    if last_saved_title in recent_titles:
+                                        st.success(f"✅ Verified: '{last_saved_title}' found in sheet.")
+                                    else:
+                                        st.error(f"❌ Verification FAILED: '{last_saved_title}' NOT found in last 10 rows.")
+                                        st.write("Recent rows:", recent_titles)
+                            except Exception as e:
+                                st.error(f"Verification Check Failed: {e}")
+
                         time.sleep(2)
-                        st.session_state.gap_results = pd.DataFrame() # Clear after save? Or keep?
+                        st.session_state.gap_results = pd.DataFrame()
                         st.rerun()
                 else:
                     st.warning("No data to save.")

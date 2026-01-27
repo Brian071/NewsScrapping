@@ -117,16 +117,16 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
         
     try:
         # Force USER_ENTERED to ensure strings are treated as such
-        print(f"DEBUG: Appending row to {worksheet_name}: {row_values[:2]}...")
+        print(f"DEBUG: Appending row to {ws.title}: {row_values[:2]}...")
         ws.append_row(row_values, value_input_option='USER_ENTERED')
-        return True
+        return ws.title
     except Exception as e:
         print(f"ERROR: Append failed: {e}")
         if "Quota exceeded" in str(e):
             print("Quota exceeded, retrying...")
             time.sleep(2)
             ws.append_row(row_values, value_input_option='USER_ENTERED')
-            return True
+            return ws.title
         raise e
 
 def find_row_index_by_keys(ws, date, entity, title):
