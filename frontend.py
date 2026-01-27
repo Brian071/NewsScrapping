@@ -83,7 +83,7 @@ app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "�
 if app_mode == "📝 Input & Scraping":
     st.title("📝 Input & Scraping Dashboard")
     
-    sub_page = st.sidebar.radio("Menu", ["Input Manual", "Batch Scrape (Auto)", "Gap Filler (Manual Scrape)", "Monitor Data"])
+    sub_page = st.sidebar.radio("Menu", ["Input Manual", "Batch Scrape (Auto)", "Gap Filler (Manual Scrape)", "Monitor Data", "Troubleshoot Connection"])
 
     # --- 1. INPUT MANUAL ---
     if sub_page == "Input Manual":
@@ -345,11 +345,14 @@ if app_mode == "📝 Input & Scraping":
                                     last_sheet_name = gsheet_handler.append_to_sheet(payload)
                                     last_saved_title = payload.get("Judul")
                                     count += 1
+
+                                    # Feedback per row
+                                    st.toast(f"Saved: {last_sheet_name}")
                                 except Exception as e:
                                     st.error(f"Error saving row {index}: {e}")
 
                         if count > 0:
-                            st.success(f"Successfully saved {count} rows to '{last_sheet_name}'!")
+                            st.success(f"Successfully saved {count} rows! Last location: '{last_sheet_name}'")
 
                             # Strict Verification
                             try:
@@ -444,7 +447,7 @@ if app_mode == "📝 Input & Scraping":
                                     st.error(f"Error saving row {index}: {e}")
 
                         if count > 0:
-                            st.success(f"Successfully saved {count} rows to '{last_sheet_name}'!")
+                            st.success(f"Successfully saved {count} rows! Last location: '{last_sheet_name}'")
 
                             # Strict Verification
                             try:
@@ -485,6 +488,19 @@ if app_mode == "📝 Input & Scraping":
             st.dataframe(df[mask].sort_values(by="Tanggal", ascending=False))
         else:
             st.write("No data.")
+
+    # --- 5. TROUBLESHOOT ---
+    elif sub_page == "Troubleshoot Connection":
+        st.subheader("🔧 Connection Troubleshooter")
+        if st.button("Check Google Sheet Connection"):
+            with st.spinner("Checking..."):
+                info = gsheet_handler.check_connection()
+                if isinstance(info, dict):
+                    st.success(f"Connected to: **{info['title']}** (ID: `{info['id']}`)")
+                    st.write("Available Worksheets:")
+                    st.json(info['sheets'])
+                else:
+                    st.error(f"Connection Failed: {info}")
 
 # ==========================================
 # APP B: TRANSLATOR

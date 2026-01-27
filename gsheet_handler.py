@@ -3,6 +3,7 @@ import pandas as pd
 from google.auth import default
 import time
 from gspread.utils import rowcol_to_a1
+import re
 
 # Default Spreadsheet ID provided by user
 DEFAULT_SPREADSHEET_ID = "1U8xeumDGJckZsTqIMyNr0DBfg0Bv9_IRpDV6XdN59Hw"
@@ -67,13 +68,38 @@ def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita")
     except Exception as e:
         raise Exception(f"Could not open spreadsheet/worksheet: {e}")
 
+def check_connection(sheet_id=DEFAULT_SPREADSHEET_ID):
+    """Debug tool to verify connection and available sheets"""
+    creds = get_creds()
+    if not creds:
+        return "Authentication Failed"
+
+    gc = gspread.authorize(creds)
+    try:
+        sh = gc.open_by_key(sheet_id)
+        info = {
+            "title": sh.title,
+            "id": sh.id,
+            "sheets": []
+        }
+        for ws in sh.worksheets():
+            info["sheets"].append({
+                "title": ws.title,
+                "id": ws.id,
+                "rows": ws.row_count,
+                "cols": ws.col_count
+            })
+        return info
+    except Exception as e:
+        return str(e)
+
 def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita"):
     try:
         target_name = worksheet_name if isinstance(worksheet_name, str) else "data_berita"
         ws = get_worksheet(sheet_id, target_name)
         data = ws.get_all_records()
         
-        print(f"DEBUG: read_sheet_to_df found {len(data)} records in {target_name}")
+        print(f"DEBUG: read_sheet_to_df found {len(data)} records in {target_name} (Sheet ID: {ws.id})")
         
         df = pd.DataFrame(data)
         
@@ -99,13 +125,11 @@ def read_sheet_to_df(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berit
 
 def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita"):
     # 1. Content Chunking (Handle >45k chars)
-    # Check "Isi" (Indonesian) and "Isi_Inggris" (English)
     for col_check in ["Isi", "Isi_Inggris"]:
         content = str(row_data.get(col_check, ""))
         if len(content) > 45000:
             print(f"DEBUG: Content in '{col_check}' exceeds 45k chars ({len(content)}). Splitting...")
 
-            # Split into chunks of 45000
             chunk_size = 45000
             parts = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
 
@@ -115,13 +139,12 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
 
             for i, part in enumerate(parts):
                 new_row = row_data.copy()
-                new_row[col_check] = part # Overwrite with chunk
+                new_row[col_check] = part
 
                 if i > 0:
                     new_row["Judul"] = f"{base_title} (Part {i+1})"
                     new_row["URL"] = f"{base_url}#part{i+1}"
 
-                # Recursive call with the modified row (which now has <45k chars in this column)
                 last_sheet_name = append_to_sheet(new_row, sheet_id, worksheet_name)
                 time.sleep(1)
 
@@ -135,33 +158,49 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
         ws.append_row(headers)
     
     # 2. Fuzzy Header Matching
-    # Normalize input keys: "Judul" -> "judul"
     data_map = {k.strip().lower(): v for k, v in row_data.items()}
-
     row_values = []
 
-    # Debug info to help diagnose mismatch
+    # Debug info
     print(f"DEBUG: Sheet Headers: {headers}")
-    # print(f"DEBUG: Input Keys: {list(row_data.keys())}")
 
     for h in headers:
         h_norm = str(h).strip().lower()
-
-        # Look for value using normalized key
         val = data_map.get(h_norm, "")
         row_values.append(str(val))
         
     try:
-        # print(f"DEBUG: Appending row to {ws.title}. First col: {row_values[0] if row_values else 'Empty'}")
-        ws.append_row(row_values, value_input_option='USER_ENTERED')
-        return ws.title
+        # 3. Capture Detailed Response
+        # value_input_option='USER_ENTERED' prevents automatic formatting (like dates)
+        resp = ws.append_row(row_values, value_input_option='USER_ENTERED')
+
+        # Parse range from response (e.g. {'spreadsheetId': '...', 'updates': {'spreadsheetId': '...', 'updatedRange': 'Sheet1!A10:G10', ...}})
+        updated_range = "Unknown"
+        if resp and isinstance(resp, dict):
+             updates = resp.get('updates', {})
+             updated_range = updates.get('updatedRange', 'Unknown Range')
+
+        # Try to extract row number from range (e.g. 'Sheet1!A10:G10' -> 10)
+        row_num = "?"
+        if updated_range != "Unknown":
+            match = re.search(r'!A(\d+):', updated_range)
+            if match:
+                row_num = match.group(1)
+            else:
+                 # Fallback regex for generic range
+                 match = re.search(r'\d+$', updated_range)
+                 if match: row_num = match.group(0)
+
+        # Return string with debugging info
+        return f"{ws.title} (Row {row_num})"
+
     except Exception as e:
         print(f"ERROR: Append failed: {e}")
         if "Quota exceeded" in str(e):
             print("Quota exceeded, retrying...")
             time.sleep(2)
             ws.append_row(row_values, value_input_option='USER_ENTERED')
-            return ws.title
+            return f"{ws.title} (Retry)"
         raise e
 
 def find_row_index_by_keys(ws, date, entity, title):
