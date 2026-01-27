@@ -8,9 +8,9 @@ import nest_asyncio
 import uuid
 
 # Local Modules
-import db_handler
 import gsheet_handler
 import translator_utils
+import scraper_lib
 
 # Force default loop policy for Colab stability
 try:
@@ -23,43 +23,18 @@ try:
 except Exception:
     pass
 
-# Initialize DB on Startup
-db_handler.init_db()
-
 st.set_page_config(page_title="Auto AI News System", page_icon="🤖", layout="wide")
-
-# --- Session State Initialization ---
-if 'batch_results' not in st.session_state:
-    st.session_state.batch_results = pd.DataFrame()
-if 'gap_results' not in st.session_state:
-    st.session_state.gap_results = pd.DataFrame()
-if 'search_results' not in st.session_state:
-    st.session_state.search_results = []
-if 'scrape_url_result' not in st.session_state:
-    st.session_state.scrape_url_result = None
-
-if 'job_id' not in st.session_state:
-    st.session_state.job_id = None
-if 'job_type' not in st.session_state:
-    # 'batch', 'gap', 'search_links', 'scrape_url'
-    st.session_state.job_type = None
 
 # --- Sidebar Config ---
 st.sidebar.title("🤖 Auto AI System")
 st.sidebar.header("⚙️ Configuration")
-st.sidebar.info("Running in Database Mode (Worker Driven)")
+st.sidebar.info("Running in Direct Mode (Synchronous)")
+
+# --- Session State ---
+if 'batch_results' not in st.session_state:
+    st.session_state.batch_results = pd.DataFrame()
 
 # --- Helper Functions ---
-def serialize_payload(payload):
-    """Ensure all values in payload are JSON serializable (convert timestamps to str)."""
-    clean = {}
-    for k, v in payload.items():
-        if isinstance(v, (pd.Timestamp, datetime, datetime.date)):
-             clean[k] = v.strftime("%Y-%m-%d")
-        else:
-             clean[k] = v
-    return clean
-
 def get_data():
     try:
         df = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
@@ -77,78 +52,6 @@ def get_logs():
         pass
     return pd.DataFrame()
 
-# --- Job Polling Widget ---
-def job_polling_widget():
-    if st.session_state.job_id:
-        st.divider()
-        st.info(f"⏳ Background Job Running (ID: {st.session_state.job_id})...")
-
-        try:
-            # Poll DB directly
-            job = db_handler.get_job(st.session_state.job_id)
-            if job:
-                status = job.get("status")
-                processed = job.get("processed", 0)
-                total = job.get("total", 1)
-
-                # Fetch results if any
-                results = db_handler.get_job_results(st.session_state.job_id)
-
-                # Progress Bar
-                if total > 0:
-                     progress = min(1.0, max(0.0, processed / total))
-                     st.progress(progress)
-                else:
-                     st.progress(0) # Show 0% if total is 0 (Initializing)
-
-                st.write(f"Processed: {processed} / {total}")
-
-                current_action = job.get("current_action", "")
-                if current_action:
-                    st.text(f"Status: {current_action}")
-
-                if status == "completed":
-                    # Distribute results based on job type
-                    if st.session_state.job_type == "batch":
-                        st.session_state.batch_results = pd.DataFrame(results)
-                        st.success(f"Job Completed! Found {len(results)} articles.")
-
-                    elif st.session_state.job_type == "gap":
-                        st.session_state.gap_results = pd.DataFrame(results)
-                        st.success(f"Job Completed! Found {len(results)} articles.")
-
-                    elif st.session_state.job_type == "search_links":
-                        # Convert results to list of dicts for display
-                        st.session_state.search_results = results
-                        st.success(f"Search Completed! Found {len(results)} links.")
-
-                    elif st.session_state.job_type == "scrape_url":
-                        if results:
-                            st.session_state.scrape_url_result = results[0]
-                            st.success("URL Scraped successfully!")
-                        else:
-                            st.error("URL Scraped but no result returned?")
-
-                    st.session_state.job_id = None
-                    st.session_state.job_type = None
-                    time.sleep(1)
-                    st.rerun()
-
-                elif status == "failed":
-                    st.error(f"Job Failed: {job.get('msg')}")
-                    st.session_state.job_id = None
-                    st.session_state.job_type = None
-                else:
-                    time.sleep(2)
-                    st.rerun()
-            else:
-                st.warning("Job not found in DB...")
-                time.sleep(2)
-        except Exception as e:
-             st.error(f"Polling Error: {e}")
-             time.sleep(5)
-             st.rerun()
-
 app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
 
 # ==========================================
@@ -158,9 +61,6 @@ if app_mode == "📝 Input & Scraping":
     st.title("📝 Input & Scraping Dashboard")
     
     sub_page = st.sidebar.radio("Menu", ["Input Manual", "Batch Scrape (Auto)", "Gap Filler (Manual Scrape)", "Monitor Data"])
-
-    # Global Job Status
-    job_polling_widget()
 
     # --- 1. INPUT MANUAL ---
     if sub_page == "Input Manual":
@@ -236,7 +136,6 @@ if app_mode == "📝 Input & Scraping":
             is_filled = False
             existing = pd.DataFrame()
             if not df.empty and 'Tanggal' in df.columns:
-                 # Ensure string matching works
                  df['Tanggal_Str'] = df['Tanggal'].astype(str)
                  existing = df[(df['Tanggal_Str'].str.contains(date_str)) & (df['Entitas'] == sel_entity)]
                  is_filled = not existing.empty
@@ -272,29 +171,20 @@ if app_mode == "📝 Input & Scraping":
                 st.write("**Find News Links:**")
                 search_kw = st.text_input("Search Keywords", value="news berita terkini")
 
-                if st.button("🔎 Search Links", disabled=(st.session_state.job_id is not None)):
-                    # Clear previous results
-                    st.session_state.search_results = []
+                if st.button("🔎 Search Links"):
+                    with st.spinner("Searching..."):
+                        links = asyncio.run(scraper_lib.run_search_links(date_str, sel_entity, search_kw))
+                        st.session_state.search_results = links
+                        if links:
+                             st.success(f"Found {len(links)} links")
+                        else:
+                             st.warning("No links found.")
 
-                    # Create Search Job
-                    job_id = str(uuid.uuid4())
-                    db_handler.create_job(job_id, "queued")
-                    db_handler.save_job_params(job_id, {
-                        "job_type": "search_links",
-                        "date": date_str,
-                        "entity": sel_entity,
-                        "keywords": search_kw
-                    })
-                    st.session_state.job_id = job_id
-                    st.session_state.job_type = "search_links"
-                    st.rerun()
-
-                # Display Search Results if available
-                if st.session_state.search_results:
+                if 'search_results' in st.session_state and st.session_state.search_results:
                      st.write(f"Found {len(st.session_state.search_results)} links:")
                      for item in st.session_state.search_results:
-                         title = item.get('Judul', 'No Title') # 'title' mapped to 'Judul' in get_job_results
-                         url = item.get('URL')
+                         title = item.get('title', 'No Title')
+                         url = item.get('url')
                          st.markdown(f"- [{title}]({url})")
                          st.code(url)
 
@@ -302,49 +192,31 @@ if app_mode == "📝 Input & Scraping":
             st.write("### 📝 Editor / Scraper")
 
             with st.expander("🌐 Scrape from URL (Auto-Fill)"):
-                st.caption("Scraping will fill title/content. Date updated if detected.")
                 url_to_scrape = st.text_input("Paste URL here")
-
-                if st.button("🚀 Scrape URL", disabled=(st.session_state.job_id is not None)):
+                if st.button("🚀 Scrape URL"):
                     if url_to_scrape:
-                        st.session_state.scrape_url_result = None
-
-                        job_id = str(uuid.uuid4())
-                        db_handler.create_job(job_id, "queued")
-                        db_handler.save_job_params(job_id, {
-                            "job_type": "scrape_url",
-                            "url": url_to_scrape
-                        })
-                        st.session_state.job_id = job_id
-                        st.session_state.job_type = "scrape_url"
-                        st.rerun()
-
-            # Check for Scrape Result
-            if st.session_state.scrape_url_result:
-                res = st.session_state.scrape_url_result
-                st.session_state['temp_title'] = res.get('Judul', '')
-                st.session_state['temp_content'] = res.get('Isi', '')
-                st.session_state['temp_url'] = res.get('URL', '')
-
-                # Check date
-                s_date = res.get('Tanggal')
-                if s_date:
-                     try:
-                         new_date = datetime.strptime(str(s_date), "%Y-%m-%d").date()
-                         st.session_state['input_manual_date'] = new_date
-                         st.success(f"Date detected: {new_date}")
-                     except:
-                         pass
-
-                # Clear result after consuming
-                st.session_state.scrape_url_result = None
-                st.rerun()
+                        with st.spinner("Scraping..."):
+                            t, c, d = asyncio.run(scraper_lib.extract_article_content_async(url_to_scrape))
+                            if t and t != "Error":
+                                st.session_state['temp_title'] = t
+                                st.session_state['temp_content'] = c
+                                st.session_state['temp_url'] = url_to_scrape
+                                if d:
+                                     try:
+                                         new_date = datetime.strptime(str(d), "%Y-%m-%d").date()
+                                         st.session_state['input_manual_date'] = new_date
+                                         st.success(f"Date detected: {new_date}")
+                                     except: pass
+                                st.rerun()
+                            else:
+                                st.error(f"Failed: {c}")
 
             with st.form("manual_form"):
                 default_title = st.session_state.get('temp_title', '')
                 default_content = st.session_state.get('temp_content', '')
                 default_url = st.session_state.get('temp_url', '')
 
+                # Consume temp state
                 if 'temp_title' in st.session_state: del st.session_state['temp_title']
                 if 'temp_content' in st.session_state: del st.session_state['temp_content']
                 if 'temp_url' in st.session_state: del st.session_state['temp_url']
@@ -379,29 +251,36 @@ if app_mode == "📝 Input & Scraping":
 
     # --- 2. BATCH SCRAPE ---
     elif sub_page == "Batch Scrape (Auto)":
-        st.subheader("🚀 Batch Scrape (Async)")
+        st.subheader("🚀 Batch Scrape (Direct)")
         c1, c2, c3 = st.columns(3)
         start = c1.date_input("Start")
         end = c2.date_input("End")
         entity = c3.selectbox("Entity", ["AirAsia", "Garuda Indonesia"], key="batch_ent")
         kw = st.text_input("Keywords")
         
-        if st.button("Start Batch Scrape", disabled=(st.session_state.job_id is not None)):
+        status_box = st.empty()
+        progress_bar = st.empty()
+
+        if st.button("Start Batch Scrape"):
             if start > end:
                 st.error("Start Date must be before End Date.")
             else:
-                job_id = str(uuid.uuid4())
-                db_handler.create_job(job_id, "queued")
-                db_handler.save_job_params(job_id, {
-                    "job_type": "batch_scrape",
-                    "start_date": str(start),
-                    "end_date": str(end),
-                    "entity": entity,
-                    "keywords": kw
-                })
-                st.session_state.job_id = job_id
-                st.session_state.job_type = "batch"
-                st.rerun()
+                progress_bar.progress(0)
+
+                def update_progress(current, total, msg):
+                    status_box.text(f"{msg} ({current}/{total})")
+                    if total > 0:
+                        progress_bar.progress(min(1.0, current/total))
+
+                results = asyncio.run(scraper_lib.run_batch_scrape(
+                    str(start), str(end), entity, kw, update_progress
+                ))
+
+                if results:
+                    st.session_state.batch_results = pd.DataFrame(results)
+                    st.success(f"Finished! Found {len(results)} articles.")
+                else:
+                    st.warning("Finished, but no new articles found.")
 
         if not st.session_state.batch_results.empty:
             st.divider()
@@ -411,57 +290,8 @@ if app_mode == "📝 Input & Scraping":
                 st.session_state.batch_results = pd.DataFrame()
                 st.rerun()
 
-            edited = st.data_editor(st.session_state.batch_results, key="batch_editor")
-
-            # Note: Batch scrape worker ALREADY saves to DB/Sheet?
-            # In api.py run_scrape_job, it saves to DB AND Syncs to Drive.
-            # So the results in `batch_results` are ALREADY saved.
-            # But the user might want to edit them?
-            # If they are already synced, editing here won't update the sheet unless we implement update logic.
-            # The previous logic was: Frontend receives results, then User selects "Save".
-            # BUT api.py logic was: Worker saves immediately.
-            # Wait, `api.py` run_scrape_job says:
-            # `db_handler.save_result` (Local DB)
-            # Then `Syncing to Drive...` (GSheet)
-            # So they ARE already in GSheet.
-            # So "Save Selected Results" button in previous code was... redundant?
-            # Or maybe previous code didn't sync automatically?
-            # Looking at `api.py` `run_scrape_job`: It DOES call `gsheet_handler.bulk_append`.
-            # So yes, they are autosaved.
-            # The previous Frontend had "Save Selected Results" which called `/save`.
-            # If `run_scrape_job` already saved them, this would create duplicates!
-            # Let's check `api.py` again.
-            # `run_scrape_job` -> `gsheet_handler.bulk_append`.
-            # `frontend.py` -> `requests.post(..., /start_scrape)`.
-            # Then it just DISPLAYS results.
-            # The previous frontend `Batch Scrape` section had `st.data_editor` and `Save Selected Results`.
-            # If the user clicked Save, it would POST `/save`.
-            # This implies the previous `start_scrape` MIGHT NOT have been syncing to GSheet?
-            # In `api.py`: `run_scrape_job` DOES sync.
-            # So the previous frontend was likely creating duplicates if the user clicked Save.
-            # OR the user requested "if data exists... don't show".
-
-            # Clarification: User said "kalau data sudah ada di dataset jangan lagi ditampilkan".
-            # This implies Deduplication.
-            # `worker.py` (and `api.py`) has deduplication logic BEFORE saving.
-
-            # So, if `worker.py` autosaves, we should just show "Results (Saved)" and maybe allow Deletion?
-            # Or maybe we should disable autosync in worker and let user Review & Save?
-            # The "Gap Filler" mode in `frontend.py` had a "Save Filled Gaps" button.
-            # The "Batch Scrape" also had a "Save Selected Results".
-            # This suggests the user wants a Review step.
-
-            # BUT, `api.py` was written to autosave.
-            # If I want Review step, `worker.py` should save to DB but NOT sync to GSheet until approved.
-            # However, `worker.py` calls `gsheet_handler.bulk_append`.
-
-            # To be safe and follow the "Worker replaces API" model exactly:
-            # `worker.py` behaves like `api.py`. It syncs.
-            # So Frontend just displays "Here is what was scraped and saved."
-            # If the user edits it here, they are editing a disconnected dataframe.
-
-            st.info("Results have been automatically saved to the database/sheet.")
-
+            st.data_editor(st.session_state.batch_results)
+            st.info("Results have been automatically saved.")
 
     # --- 3. GAP FILLER ---
     elif sub_page == "Gap Filler (Manual Scrape)":
@@ -472,49 +302,30 @@ if app_mode == "📝 Input & Scraping":
         start_gap = c1.date_input("Range Start", key="gap_start")
         end_gap = c2.date_input("Range End", key="gap_end")
 
-        if st.button("🔍 Scan & Fill Gaps", disabled=(st.session_state.job_id is not None)):
+        status_gap = st.empty()
+        prog_gap = st.empty()
+
+        if st.button("🔍 Scan & Fill Gaps"):
             if start_gap > end_gap:
                 st.error("Start Date must be before End Date.")
             else:
-                job_id = str(uuid.uuid4())
-                db_handler.create_job(job_id, "queued")
-                db_handler.save_job_params(job_id, {
-                    "job_type": "batch_scrape", # Gap filler is just batch scrape
-                    "start_date": str(start_gap),
-                    "end_date": str(end_gap),
-                    "entity": entity_gap,
-                    "keywords": kw_gap
-                })
-                st.session_state.job_id = job_id
-                st.session_state.job_type = "gap"
-                st.rerun()
+                prog_gap.progress(0)
+                def update_progress_gap(current, total, msg):
+                    status_gap.text(f"{msg} ({current}/{total})")
+                    if total > 0:
+                        prog_gap.progress(min(1.0, current/total))
 
-        if not st.session_state.gap_results.empty:
-            st.divider()
-            # Client-side deduplication for display
-            df_existing = get_data()
-            existing_urls = set()
-            if not df_existing.empty and 'URL' in df_existing.columns:
-                 existing_urls = set(df_existing['URL'].dropna().astype(str).values)
+                results = asyncio.run(scraper_lib.run_batch_scrape(
+                    str(start_gap), str(end_gap), entity_gap, kw_gap, update_progress_gap
+                ))
 
-            # Filter
-            mask = []
-            for _, row in st.session_state.gap_results.iterrows():
-                url = row.get('URL')
-                if url in existing_urls: mask.append(False)
-                else: mask.append(True)
-
-            df_display = st.session_state.gap_results[mask]
-
-            st.write(f"### 📥 Results ({len(df_display)})")
-            st.caption("Duplicates hidden.")
-
-            if st.button("🗑️ Clear Results", key="clr_gap"):
-                st.session_state.gap_results = pd.DataFrame()
-                st.rerun()
-
-            st.data_editor(df_display)
-            st.info("Results are automatically saved.")
+                if results:
+                    # Append to session state for Review
+                    # Actually run_batch_scrape autosaves.
+                    st.success(f"Found and saved {len(results)} articles.")
+                    st.dataframe(pd.DataFrame(results))
+                else:
+                    st.warning("No new articles found.")
 
     # --- 4. MONITOR ---
     elif sub_page == "Monitor Data":
@@ -554,38 +365,21 @@ elif app_mode == "🔄 Translator":
             if st.button("Translate Selected"):
                 to_proc = edited[edited["Pilih"] == True]
                 if not to_proc.empty:
-                    with st.spinner("Translating... (This uses local CPU/GPU)"):
-                        # Use translator_utils directly
+                    with st.spinner("Translating..."):
                         translator_utils.load_model()
-                        splitter = translator_utils.get_splitter()
-
                         count = 0
                         for idx, row in to_proc.iterrows():
-                            # We need to update GSheet.
-                            # We have to be careful about matching the row.
-                            # We assume Date+Entity+Title is unique key?
-                            # Or just use row index if we are careful?
-                            # GSheet handler update_row_in_sheet uses (date, entity, old_title).
-
                             old_title = row['Judul']
-                            j_ing = row['Judul_Inggris']
-                            i_ing = row['Isi_Inggris']
-
                             updated = {}
-                            if not j_ing:
-                                j_ing = translator_utils.smart_translate(old_title)
-                                updated['Judul_Inggris'] = j_ing
-                            if not i_ing:
-                                i_ing = translator_utils.smart_translate(row['Isi'])
-                                updated['Isi_Inggris'] = i_ing
+                            if not row['Judul_Inggris']:
+                                updated['Judul_Inggris'] = translator_utils.smart_translate(old_title)
+                            if not row['Isi_Inggris']:
+                                updated['Isi_Inggris'] = translator_utils.smart_translate(row['Isi'])
 
                             if updated:
                                 try:
                                     gsheet_handler.update_row_in_sheet(
-                                        row['Tanggal'],
-                                        row['Entitas'],
-                                        old_title,
-                                        updated
+                                        row['Tanggal'], row['Entitas'], old_title, updated
                                     )
                                     count += 1
                                 except Exception as e:
