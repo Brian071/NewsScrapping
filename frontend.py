@@ -105,9 +105,10 @@ if app_mode == "📝 Input & Scraping":
 
             if not df_data.empty and 'Tanggal' in df_data.columns:
                 df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', dayfirst=True)
+                # Robust filtering: Strip whitespace from Entity
                 mask_data = (df_data['Tanggal'].dt.year == year) & \
                             (df_data['Tanggal'].dt.month == month) & \
-                            (df_data['Entitas'] == entity)
+                            (df_data['Entitas'].astype(str).str.strip() == entity)
                 filled_dates = set(df_data[mask_data]['Tanggal'].dt.day.astype(int).tolist())
             else:
                 filled_dates = set()
@@ -160,7 +161,8 @@ if app_mode == "📝 Input & Scraping":
             existing = pd.DataFrame()
             if not df.empty and 'Tanggal' in df.columns:
                  df['Tanggal_Str'] = df['Tanggal'].astype(str)
-                 existing = df[(df['Tanggal_Str'].str.contains(date_str)) & (df['Entitas'] == sel_entity)]
+                 # Robust check: Strip entity
+                 existing = df[(df['Tanggal_Str'].str.contains(date_str)) & (df['Entitas'].astype(str).str.strip() == sel_entity)]
                  is_filled = not existing.empty
 
             is_skipped = False
@@ -342,12 +344,19 @@ if app_mode == "📝 Input & Scraping":
                                     payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
 
                                     # Append and get sheet name
-                                    last_sheet_name = gsheet_handler.append_to_sheet(payload)
+                                    status_str = gsheet_handler.append_to_sheet(payload)
+
+                                    # Parse real sheet name from status string "SheetName (Row X)"
+                                    if " (" in status_str:
+                                        last_sheet_name = status_str.rsplit(" (", 1)[0]
+                                    else:
+                                        last_sheet_name = status_str
+
                                     last_saved_title = payload.get("Judul")
                                     count += 1
 
                                     # Feedback per row
-                                    st.toast(f"Saved: {last_sheet_name}")
+                                    st.toast(f"Saved: {status_str}")
                                 except Exception as e:
                                     st.error(f"Error saving row {index}: {e}")
 
@@ -440,7 +449,14 @@ if app_mode == "📝 Input & Scraping":
                                     # Strict String Conversion
                                     payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
 
-                                    last_sheet_name = gsheet_handler.append_to_sheet(payload)
+                                    status_str = gsheet_handler.append_to_sheet(payload)
+
+                                    # Parse real sheet name
+                                    if " (" in status_str:
+                                        last_sheet_name = status_str.rsplit(" (", 1)[0]
+                                    else:
+                                        last_sheet_name = status_str
+
                                     last_saved_title = payload.get("Judul")
                                     count += 1
                                 except Exception as e:
@@ -484,7 +500,7 @@ if app_mode == "📝 Input & Scraping":
         if not df.empty and "Tanggal" in df.columns:
             df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', dayfirst=True)
             mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
-            if m_entity != "All": mask = mask & (df["Entitas"] == m_entity)
+            if m_entity != "All": mask = mask & (df["Entitas"].astype(str).str.strip() == m_entity)
             st.dataframe(df[mask].sort_values(by="Tanggal", ascending=False))
         else:
             st.write("No data.")

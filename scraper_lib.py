@@ -196,7 +196,8 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                 d_sig = d_sig_raw
                 try:
                     # Normalize date to YYYY-MM-DD
-                    d_parsed = date_parser.parse(d_sig_raw)
+                    # Use dayfirst=True because sheet data is likely DD/MM/YYYY (Indonesian context)
+                    d_parsed = date_parser.parse(d_sig_raw, dayfirst=True)
                     d_sig = d_parsed.strftime("%Y-%m-%d")
                 except:
                     pass
@@ -294,7 +295,7 @@ async def run_search_links(date, entity, keywords):
             include = True
             if d_raw:
                 try:
-                    d_parsed = date_parser.parse(str(d_raw)).date()
+                    d_parsed = date_parser.parse(str(d_raw), dayfirst=True).date()
                     if d_parsed != req_date_obj:
                          include = False
                 except:
