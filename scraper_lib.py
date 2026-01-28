@@ -35,6 +35,28 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 ]
 
+# --- Helper Functions ---
+
+def parse_date_smart(date_str):
+    """
+    Robust date parser that prioritizes ISO YYYY-MM-DD to avoid dayfirst ambiguities.
+    """
+    date_str = str(date_str).strip()
+    if not date_str: return None
+
+    # Check YYYY-MM-DD
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        try:
+            return datetime.strptime(date_str, "%Y-%m-%d")
+        except:
+            pass
+
+    # Fallback to dateutil with dayfirst=True (for DD/MM/YYYY)
+    try:
+        return date_parser.parse(date_str, dayfirst=True)
+    except:
+        return None
+
 # --- Core Scraper Functions ---
 
 def find_date_in_text(text):
@@ -76,8 +98,10 @@ async def extract_article_content_async(url):
                     meta_date = article.meta_data.get('date') or article.meta_data.get('pubdate') or article.meta_data.get('publish_date')
                     if meta_date:
                         try:
-                            dt = date_parser.parse(str(meta_date))
-                            pub_date_str = dt.strftime("%Y-%m-%d")
+                            # Use smart parser here too
+                            dt = parse_date_smart(str(meta_date))
+                            if dt:
+                                pub_date_str = dt.strftime("%Y-%m-%d")
                         except:
                             pass
 
@@ -99,23 +123,16 @@ def search_duckduckgo(query, max_results=5, region="wt-wt"):
     results = []
     max_retries = 3
 
-    # Try 'news' first with API backend, then fallback to 'text' (general search) with default backend (api/auto)
-    # Note: backend='html' is deprecated/removed in newer ddgs versions
     methods = [("news", None), ("text", "api")]
 
     for method, backend in methods:
-        # If we already have results from a previous method, stop.
         if results: break
 
         for attempt in range(max_retries):
             try:
-                # Respect rate limits - Jitter
                 time.sleep(random.uniform(3, 8))
-
                 ua = random.choice(USER_AGENTS)
-                print(f"DEBUG: Searching '{query}' (Method: {method}, Backend: {backend}, Attempt: {attempt+1})")
 
-                # Try to pass headers if supported by installed version
                 try:
                     ddgs_instance = DDGS(headers={"User-Agent": ua}, timeout=20)
                 except TypeError:
@@ -125,26 +142,21 @@ def search_duckduckgo(query, max_results=5, region="wt-wt"):
                     if method == "news":
                         ddgs_gen = ddgs.news(query, region=region, safesearch="off", max_results=max_results)
                     else:
-                        # Fallback to general text search which allows backend='html' (often less strict)
-                        # We need to normalize output to match news format (url, title, date)
                         ddgs_gen = []
-                        # Note: text() returns 'href', 'title', 'body'
                         raw_res = ddgs.text(query, region=region, safesearch="off", max_results=max_results, backend=backend)
                         for r in raw_res:
-                            # Remap to news-like structure
                             ddgs_gen.append({
                                 "url": r.get("href"),
                                 "title": r.get("title"),
                                 "body": r.get("body"),
-                                "date": "", # No date in text search usually
+                                "date": "",
                                 "source": ""
                             })
 
                     for r in ddgs_gen:
                         results.append(r)
 
-                if results:
-                    break # Success for this method
+                if results: break
 
             except Exception as e:
                 print(f"DDGS Error ({method}, Attempt {attempt+1}): {e}")
@@ -155,11 +167,6 @@ def search_duckduckgo(query, max_results=5, region="wt-wt"):
 # --- Main Logic with Callbacks ---
 
 async def run_batch_scrape(start_date, end_date, entity, keywords, progress_callback, region="wt-wt"):
-    """
-    Directly runs the batch scrape and updates UI via callback.
-    callback(processed_count, total_count, status_message)
-    Returns: List of scraped results (dicts)
-    """
     results_list = []
     try:
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -168,11 +175,9 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
 
         progress_callback(0, delta, f"Initializing scrape for {entity}...")
 
-        # Load existing data for deduplication
         progress_callback(0, delta, "Loading dataset for deduplication...")
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
 
-        # Load blocked content
         progress_callback(0, delta, "Loading blocked content...")
         df_blocked = gsheet_handler.get_blocked_content()
 
@@ -200,8 +205,10 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                 d_sig_raw = str(row.get('Tanggal', '')).strip()
                 d_sig = d_sig_raw
                 try:
-                    d_parsed = date_parser.parse(d_sig_raw, dayfirst=True)
-                    d_sig = d_parsed.strftime("%Y-%m-%d")
+                    # USE SMART PARSER
+                    d_parsed = parse_date_smart(d_sig_raw)
+                    if d_parsed:
+                        d_sig = d_parsed.strftime("%Y-%m-%d")
                 except:
                     pass
 
@@ -219,10 +226,6 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
 
         job_seen_urls = set()
 
-        # Sequential execution is safer for direct UI updates than complex asyncio gathering
-        # but we can still use semaphore if we want concurrency.
-        # Let's keep it simple: Loop through dates.
-
         processed = 0
         for i in range(delta):
             date_obj = start_dt + timedelta(days=i)
@@ -232,21 +235,19 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
 
             query = f"{entity} {keywords} {date_str}"
 
-            # Pass region if available in params (TODO: Add to run_batch_scrape signature later)
-            # For now, default to wt-wt or use global config logic if implemented.
             search_res = await asyncio.to_thread(search_duckduckgo, query, region=region)
 
             for res in search_res:
                 url = res.get('url')
                 if not url: continue
 
-                # 1. URL Check (Deduplication + Blocked)
+                # 1. URL Check
                 url_clean = url.strip()
                 if url_clean in existing_urls: continue
                 if url_clean in blocked_urls: continue
                 if url in job_seen_urls: continue
 
-                # 2. Pre-Scrape Title Check (if available from search result)
+                # 2. Pre-Scrape Title Check
                 search_title = res.get('title', '').strip().lower()
                 if search_title:
                     if search_title in existing_titles: continue
@@ -269,7 +270,6 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                     if (d_norm, t_norm) in existing_signatures:
                          continue
 
-                    # Double check title against existing titles generally (optional but safer)
                     if t_norm in existing_titles:
                         continue
 
@@ -284,10 +284,7 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                     }
                     results_list.append(item)
 
-                    # 1. Save to Temp File (Persist Local / Session Recovery)
-                    # We do NOT save to GSheet automatically anymore (User Request: "Manual Check")
                     try:
-                        # Append to JSONL file
                         with open(TEMP_RESULTS_FILE, "a") as f:
                             f.write(json.dumps(item) + "\n")
                     except Exception as e:
@@ -307,7 +304,6 @@ async def run_search_links(date, entity, keywords):
     query = f"{entity} {keywords} {date}"
     results = await asyncio.to_thread(search_duckduckgo, query, max_results=10, region="wt-wt")
 
-    # Load blocked content & existing data for filtering
     try:
         df_blocked = gsheet_handler.get_blocked_content()
         blocked_urls = set()
@@ -333,7 +329,6 @@ async def run_search_links(date, entity, keywords):
     try:
         req_date_obj = datetime.strptime(date, "%Y-%m-%d").date()
         for r in results:
-            # Check Blocked / Existing
             url = r.get("url", "").strip()
             title = r.get("title", "").strip().lower()
 
@@ -344,15 +339,21 @@ async def run_search_links(date, entity, keywords):
             include = True
             if d_raw:
                 try:
-                    d_parsed = date_parser.parse(str(d_raw), dayfirst=True).date()
-                    if d_parsed != req_date_obj:
-                         include = False
+                    # USE SMART PARSER
+                    d_parsed = parse_date_smart(d_raw)
+                    if d_parsed:
+                        if d_parsed.date() != req_date_obj:
+                             include = False
+                    else:
+                        # Failed to parse, check string content
+                        if date not in str(d_raw):
+                             pass
                 except:
-                     if date not in str(d_raw):
-                         pass
+                     pass
+
             if include:
                 filtered.append(r)
     except:
-        filtered = results # Fallback
+        filtered = results
 
     return filtered

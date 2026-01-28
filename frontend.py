@@ -104,7 +104,9 @@ if app_mode == "📝 Input & Scraping":
             st.write(f"#### 📅 Status: {month_name} {year}")
 
             if not df_data.empty and 'Tanggal' in df_data.columns:
-                df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', dayfirst=True)
+                # FIX: Use format='mixed' to handle both YYYY-MM-DD and DD/MM/YYYY
+                df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', format='mixed', dayfirst=True)
+
                 # Robust filtering: Strip whitespace from Entity
                 mask_data = (df_data['Tanggal'].dt.year == year) & \
                             (df_data['Tanggal'].dt.month == month) & \
@@ -115,7 +117,9 @@ if app_mode == "📝 Input & Scraping":
 
             skipped_dates = set()
             if not df_logs.empty and 'Tanggal' in df_logs.columns:
-                 df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', dayfirst=True)
+                 # FIX: Use format='mixed'
+                 df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', format='mixed', dayfirst=True)
+
                  # Check entity matching more robustly (strip whitespace)
                  mask_logs = (df_logs['Tanggal'].dt.year == year) & \
                              (df_logs['Tanggal'].dt.month == month) & \
@@ -609,7 +613,8 @@ if app_mode == "📝 Input & Scraping":
 
         df = get_data()
         if not df.empty and "Tanggal" in df.columns:
-            df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', dayfirst=True)
+            # FIX: Use format='mixed'
+            df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', format='mixed', dayfirst=True)
             mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
             if m_entity != "All": mask = mask & (df["Entitas"].astype(str).str.strip() == m_entity)
             st.dataframe(df[mask].sort_values(by="Tanggal", ascending=False))
