@@ -99,8 +99,9 @@ def search_duckduckgo(query, max_results=5, region="wt-wt"):
     results = []
     max_retries = 3
 
-    # Try 'news' first with API backend, then fallback to 'text' (general search) with html backend
-    methods = [("news", None), ("text", "html")]
+    # Try 'news' first with API backend, then fallback to 'text' (general search) with default backend (api/auto)
+    # Note: backend='html' is deprecated/removed in newer ddgs versions
+    methods = [("news", None), ("text", "api")]
 
     for method, backend in methods:
         # If we already have results from a previous method, stop.
