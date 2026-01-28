@@ -116,9 +116,10 @@ if app_mode == "📝 Input & Scraping":
             skipped_dates = set()
             if not df_logs.empty and 'Tanggal' in df_logs.columns:
                  df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', dayfirst=True)
+                 # Check entity matching more robustly (strip whitespace)
                  mask_logs = (df_logs['Tanggal'].dt.year == year) & \
                              (df_logs['Tanggal'].dt.month == month) & \
-                             (df_logs['Entitas'] == entity)
+                             (df_logs['Entitas'].astype(str).str.strip() == entity)
                  skipped_dates = set(df_logs[mask_logs]['Tanggal'].dt.day.astype(int).tolist())
 
             cols = st.columns(7)
@@ -250,9 +251,11 @@ if app_mode == "📝 Input & Scraping":
                         with st.spinner("Scraping..."):
                             t, c, d = asyncio.run(scraper_lib.extract_article_content_async(url_to_scrape))
                             if t and t != "Error":
-                                st.session_state['temp_title'] = t
-                                st.session_state['temp_content'] = c
-                                st.session_state['temp_url'] = url_to_scrape
+                                # Update session state keys directly used by the inputs
+                                st.session_state['input_judul'] = t
+                                st.session_state['input_isi'] = c
+                                st.session_state['input_url'] = url_to_scrape
+
                                 if d:
                                      try:
                                          new_date = datetime.strptime(str(d), "%Y-%m-%d").date()
@@ -263,37 +266,49 @@ if app_mode == "📝 Input & Scraping":
                             else:
                                 st.error(f"Failed: {c}")
 
+            # Initialize input keys if not present
+            if 'input_judul' not in st.session_state: st.session_state['input_judul'] = ""
+            if 'input_isi' not in st.session_state: st.session_state['input_isi'] = ""
+            if 'input_url' not in st.session_state: st.session_state['input_url'] = ""
+
             with st.form("manual_form"):
-                default_title = st.session_state.get('temp_title', '')
-                default_content = st.session_state.get('temp_content', '')
-                default_url = st.session_state.get('temp_url', '')
-
-                # Consume temp state
-                if 'temp_title' in st.session_state: del st.session_state['temp_title']
-                if 'temp_content' in st.session_state: del st.session_state['temp_content']
-                if 'temp_url' in st.session_state: del st.session_state['temp_url']
-
-                t = st.text_input("Judul", value=default_title)
-                c = st.text_area("Isi", height=300, value=default_content)
-                u = st.text_input("URL (Optional)", value=default_url)
+                # Use key= to bind directly to session state
+                t = st.text_input("Judul", key="input_judul")
+                c = st.text_area("Isi", height=300, key="input_isi")
+                u = st.text_input("URL (Optional)", key="input_url")
 
                 if st.form_submit_button("💾 Simpan Data"):
-                    payload = {
-                        "Tanggal": str(selected_date),
-                        "Entitas": sel_entity,
-                        "Judul": t,
-                        "Isi": c,
-                        "URL": u,
-                        "Judul_Inggris": "",
-                        "Isi_Inggris": ""
-                    }
-                    try:
-                        gsheet_handler.append_to_sheet(payload)
-                        st.success("Tersimpan!")
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Save Error: {e}")
+                    # Read values directly from session state to ensure latest user edits are captured
+                    # (Variables t, c, u are also valid here, but explicit state read is safer with forms on some versions)
+                    final_t = st.session_state.get("input_judul", "")
+                    final_c = st.session_state.get("input_isi", "")
+                    final_u = st.session_state.get("input_url", "")
+
+                    if not final_t:
+                        st.error("Judul cannot be empty.")
+                    else:
+                        payload = {
+                            "Tanggal": str(selected_date),
+                            "Entitas": sel_entity,
+                            "Judul": final_t,
+                            "Isi": final_c,
+                            "URL": final_u,
+                            "Judul_Inggris": "",
+                            "Isi_Inggris": ""
+                        }
+                        try:
+                            gsheet_handler.append_to_sheet(payload)
+                            st.success("Tersimpan!")
+
+                            # Clear inputs after save
+                            st.session_state['input_judul'] = ""
+                            st.session_state['input_isi'] = ""
+                            st.session_state['input_url'] = ""
+
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Save Error: {e}")
 
             if is_filled:
                 st.write("---")
