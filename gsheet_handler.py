@@ -61,6 +61,8 @@ def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita")
             # Initialize Headers based on type
             if worksheet_name == "log_kosong":
                 ws.append_row(["Tanggal", "Entitas", "Alasan", "Timestamp"])
+            elif worksheet_name == "blocked_content":
+                ws.append_row(["URL", "Title", "Reason", "Timestamp"])
             else:
                 ws.append_row(["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
             return ws

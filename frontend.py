@@ -207,11 +207,38 @@ if app_mode == "📝 Input & Scraping":
 
                 if 'search_results' in st.session_state and st.session_state.search_results:
                      st.write(f"Found {len(st.session_state.search_results)} links:")
-                     for item in st.session_state.search_results:
-                         title = item.get('title', 'No Title')
-                         url = item.get('url')
-                         st.markdown(f"- [{title}]({url})")
-                         st.code(url)
+
+                     df_search = pd.DataFrame(st.session_state.search_results)
+                     if "Block" not in df_search.columns:
+                         df_search.insert(0, "Block", False)
+
+                     # Show editor
+                     edited_search = st.data_editor(
+                         df_search,
+                         column_config={
+                             "url": st.column_config.LinkColumn("URL"),
+                             "Block": st.column_config.CheckboxColumn("Block", default=False)
+                         },
+                         key="manual_search_editor",
+                         num_rows="dynamic"
+                     )
+
+                     if st.button("🚫 Block Selected", key="manual_block_btn"):
+                         to_block = edited_search[edited_search["Block"] == True]
+                         if not to_block.empty:
+                             with st.spinner("Blocking..."):
+                                 for _, row in to_block.iterrows():
+                                     gsheet_handler.log_blocked_content(row.get("url"), row.get("title"), "Manual Block (Search)")
+
+                                 # Update session state: keep only unblocked
+                                 remaining_df = edited_search[edited_search["Block"] == False]
+                                 if "Block" in remaining_df.columns:
+                                     remaining_df = remaining_df.drop(columns=["Block"])
+
+                                 st.session_state.search_results = remaining_df.to_dict('records')
+                                 st.success("Blocked!")
+                                 time.sleep(1)
+                                 st.rerun()
 
         with c2:
             st.write("### 📝 Editor / Scraper")
@@ -317,7 +344,11 @@ if app_mode == "📝 Input & Scraping":
             st.divider()
             st.write(f"### 📥 Review Results ({len(st.session_state.batch_results)})")
 
-            c_clear, c_save, _ = st.columns([1, 2, 4])
+            # Add Block Column if missing
+            if "Block" not in st.session_state.batch_results.columns:
+                st.session_state.batch_results.insert(0, "Block", False)
+
+            c_clear, c_block, c_save = st.columns([1, 1, 2])
 
             if c_clear.button("🗑️ Clear Results"):
                 st.session_state.batch_results = pd.DataFrame()
@@ -328,20 +359,58 @@ if app_mode == "📝 Input & Scraping":
             # Editor
             edited_df = st.data_editor(st.session_state.batch_results, num_rows="dynamic", key="batch_editor")
 
+            # Block Button
+            if c_block.button("🚫 Block Selected"):
+                to_block = edited_df[edited_df["Block"] == True]
+                if not to_block.empty:
+                    with st.spinner(f"Blocking {len(to_block)} items..."):
+                        for _, row in to_block.iterrows():
+                             gsheet_handler.log_blocked_content(row.get("URL", ""), row.get("Judul", ""), "Manual Block")
+
+                        # Remove blocked from session state and drop Block column for clean storage
+                        remaining = edited_df[edited_df["Block"] == False].copy()
+                        if "Block" in remaining.columns:
+                            remaining = remaining.drop(columns=["Block"])
+
+                        st.session_state.batch_results = remaining
+
+                        # Update temp file
+                        try:
+                            if os.path.exists(TEMP_RESULTS_FILE):
+                                os.remove(TEMP_RESULTS_FILE)
+                            if not remaining.empty:
+                                with open(TEMP_RESULTS_FILE, "w") as f:
+                                    for _, row in remaining.iterrows():
+                                        f.write(json.dumps(row.to_dict()) + "\n")
+                        except: pass
+
+                        st.success(f"Blocked {len(to_block)} items.")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.warning("No items selected to block.")
+
             # Save Button (Manual)
             if c_save.button("💾 Save Verified to Sheet"):
-                if not edited_df.empty:
+                # Filter out Block=True rows just in case
+                save_df = edited_df[edited_df["Block"] == False]
+
+                if not save_df.empty:
                     with st.spinner("Saving to Google Sheets..."):
                         count = 0
                         last_sheet_name = "Unknown"
                         last_saved_title = ""
 
-                        for index, row in edited_df.iterrows():
+                        for index, row in save_df.iterrows():
                             # Only save if title exists (basic validation)
                             if row.get("Judul"):
                                 try:
                                     # Strict String Conversion
-                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
+                                    # Remove 'Block' column if present in payload
+                                    row_dict = row.to_dict()
+                                    if "Block" in row_dict: del row_dict["Block"]
+
+                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row_dict.items()}
 
                                     # Append and get sheet name
                                     status_str = gsheet_handler.append_to_sheet(payload)
@@ -426,7 +495,11 @@ if app_mode == "📝 Input & Scraping":
             st.divider()
             st.write(f"### 📥 Review Results ({len(st.session_state.gap_results)})")
 
-            c_clear, c_save, _ = st.columns([1, 2, 4])
+            # Add Block Column
+            if "Block" not in st.session_state.gap_results.columns:
+                st.session_state.gap_results.insert(0, "Block", False)
+
+            c_clear, c_block, c_save = st.columns([1, 1, 2])
 
             if c_clear.button("🗑️ Clear Results", key="gap_clear"):
                 st.session_state.gap_results = pd.DataFrame()
@@ -435,19 +508,42 @@ if app_mode == "📝 Input & Scraping":
             # Editor
             edited_gap_df = st.data_editor(st.session_state.gap_results, num_rows="dynamic", key="gap_editor")
 
+            # Block Button
+            if c_block.button("🚫 Block Selected", key="gap_block"):
+                to_block = edited_gap_df[edited_gap_df["Block"] == True]
+                if not to_block.empty:
+                    with st.spinner(f"Blocking {len(to_block)} items..."):
+                        for _, row in to_block.iterrows():
+                             gsheet_handler.log_blocked_content(row.get("URL", ""), row.get("Judul", ""), "Manual Block")
+
+                        remaining = edited_gap_df[edited_gap_df["Block"] == False].copy()
+                        if "Block" in remaining.columns:
+                            remaining = remaining.drop(columns=["Block"])
+
+                        st.session_state.gap_results = remaining
+                        st.success(f"Blocked {len(to_block)} items.")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.warning("No items selected to block.")
+
             # Save Button (Manual)
             if c_save.button("💾 Save Verified to Sheet", key="gap_save"):
-                if not edited_gap_df.empty:
+                save_df = edited_gap_df[edited_gap_df["Block"] == False]
+                if not save_df.empty:
                     with st.spinner("Saving to Google Sheets..."):
                         count = 0
                         last_sheet_name = "Unknown"
                         last_saved_title = ""
 
-                        for index, row in edited_gap_df.iterrows():
+                        for index, row in save_df.iterrows():
                             if row.get("Judul"):
                                 try:
                                     # Strict String Conversion
-                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
+                                    row_dict = row.to_dict()
+                                    if "Block" in row_dict: del row_dict["Block"]
+
+                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row_dict.items()}
 
                                     status_str = gsheet_handler.append_to_sheet(payload)
 
