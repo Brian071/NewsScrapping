@@ -214,7 +214,7 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
             if "URL" in df_blocked.columns:
                 blocked_urls = set(df_blocked["URL"].dropna().astype(str).str.strip().values)
             if "Title" in df_blocked.columns:
-                blocked_titles = set(df_blocked["Title"].dropna().astype(str).str.strip().lower().values)
+                blocked_titles = set(df_blocked["Title"].dropna().astype(str).str.strip().str.lower().values)
             progress_callback(0, delta, f"Loaded {len(df_blocked)} blocked items.")
 
         job_seen_urls = set()
@@ -316,7 +316,7 @@ async def run_search_links(date, entity, keywords):
             if "URL" in df_blocked.columns:
                 blocked_urls = set(df_blocked["URL"].dropna().astype(str).str.strip().values)
             if "Title" in df_blocked.columns:
-                blocked_titles = set(df_blocked["Title"].dropna().astype(str).str.strip().lower().values)
+                blocked_titles = set(df_blocked["Title"].dropna().astype(str).str.strip().str.lower().values)
 
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
         existing_urls = set()
