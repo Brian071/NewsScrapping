@@ -308,3 +308,20 @@ def log_empty_date(date, entity, reason="Manual Pass", sheet_id=DEFAULT_SPREADSH
 
 def get_empty_logs(sheet_id=DEFAULT_SPREADSHEET_ID):
     return read_sheet_to_df(sheet_id, "log_kosong")
+
+# --- Blocked Content Functions ---
+
+def log_blocked_content(url, title, reason="Spam", sheet_id=DEFAULT_SPREADSHEET_ID):
+    """Logs blocked content to 'blocked_content' sheet"""
+    row_data = {
+        "URL": str(url),
+        "Title": str(title),
+        "Reason": str(reason),
+        "Timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    # Append to blocked_content, creating it if needed
+    return append_to_sheet(row_data, sheet_id, "blocked_content")
+
+def get_blocked_content(sheet_id=DEFAULT_SPREADSHEET_ID):
+    """Reads blocked content into a DataFrame"""
+    return read_sheet_to_df(sheet_id, "blocked_content")
