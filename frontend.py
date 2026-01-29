@@ -605,21 +605,178 @@ if app_mode == "📝 Input & Scraping":
     # --- 4. MONITOR ---
     elif sub_page == "Monitor Data":
         st.subheader("Data Monitor")
+
+        # State Management for Stability
+        if 'monitor_df' not in st.session_state:
+            st.session_state.monitor_df = pd.DataFrame()
+
         c1, c2, c3, c4 = st.columns(4)
         m_start = c1.date_input("Start", value=datetime.now() - timedelta(days=30))
         m_end = c2.date_input("End", value=datetime.now())
         m_entity = c3.selectbox("Entity", ["All", "AirAsia", "Garuda Indonesia"])
-        if c4.button("Refresh"): st.rerun()
 
-        df = get_data()
+        # Explicit Refresh
+        if c4.button("Refresh Data") or st.session_state.monitor_df.empty:
+            with st.spinner("Fetching data..."):
+                st.session_state.monitor_df = get_data()
+                # Clear snapshots on refresh
+                if 'monitor_dupes_snapshot' in st.session_state:
+                    del st.session_state['monitor_dupes_snapshot']
+                st.rerun()
+
+        df = st.session_state.monitor_df.copy()
+
         if not df.empty and "Tanggal" in df.columns:
             # FIX: Use format='mixed'
             df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', format='mixed', dayfirst=True)
             mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
             if m_entity != "All": mask = mask & (df["Entitas"].astype(str).str.strip() == m_entity)
-            st.dataframe(df[mask].sort_values(by="Tanggal", ascending=False))
+
+            filtered_df = df[mask].sort_values(by="Tanggal", ascending=False)
+            st.dataframe(filtered_df)
+
+            # --- Duplicate / Multiple Entries Inspector ---
+            st.divider()
+            st.subheader("⚠️ Potential Duplicates / Multiple Entries")
+            st.info("Detects days where a specific Entity has 2 or more articles.")
+
+            # Logic to find duplicates
+            check_df = filtered_df.copy()
+            # Create helper column for grouping
+            check_df['DateStr'] = check_df['Tanggal'].dt.strftime('%Y-%m-%d')
+
+            # Group
+            counts = check_df.groupby(['DateStr', 'Entitas']).size().reset_index(name='count')
+            multiples = counts[counts['count'] > 1]
+
+            if not multiples.empty:
+                st.warning(f"Found {len(multiples)} groups with multiple entries.")
+
+                # Filter rows belonging to these groups
+                keys = set(zip(multiples['DateStr'], multiples['Entitas']))
+                dupes_df = check_df[check_df.apply(lambda x: (x['DateStr'], x['Entitas']) in keys, axis=1)].copy()
+
+                # Clean up helper
+                if 'DateStr' in dupes_df.columns: del dupes_df['DateStr']
+
+                # Convert Date back to string for display/editing stability
+                dupes_df['Tanggal'] = dupes_df['Tanggal'].dt.strftime('%Y-%m-%d')
+
+                # Reset index to ensure 0..N alignment for comparison
+                dupes_df = dupes_df.reset_index(drop=True)
+
+                # Initialize Snapshot for Change Detection
+                if 'monitor_dupes_snapshot' not in st.session_state:
+                    st.session_state.monitor_dupes_snapshot = dupes_df.copy()
+
+                # Add Select Column
+                if "Select" not in dupes_df.columns:
+                    dupes_df.insert(0, "Select", False)
+
+                # Layout
+                c_edit, c_actions = st.columns([3, 1])
+
+                with c_edit:
+                    edited_dupes = st.data_editor(
+                        dupes_df,
+                        key="dupes_editor",
+                        column_config={
+                            "Select": st.column_config.CheckboxColumn("Archive?", default=False),
+                            "URL": st.column_config.LinkColumn("URL"),
+                            "Isi": st.column_config.TextColumn("Isi", width="small")
+                        },
+                        num_rows="fixed"
+                    )
+
+                with c_actions:
+                    st.write("#### Actions")
+
+                    # ARCHIVE BUTTON
+                    if st.button("📦 Archive Selected"):
+                        to_archive = edited_dupes[edited_dupes["Select"] == True]
+                        if not to_archive.empty:
+                            with st.spinner(f"Archiving {len(to_archive)} items..."):
+                                success_count = 0
+                                for _, row in to_archive.iterrows():
+                                    try:
+                                        row_data = row.to_dict()
+                                        # Cleanup internal keys
+                                        if "Select" in row_data: del row_data["Select"]
+                                        row_data = {k: str(v) for k, v in row_data.items()}
+
+                                        msg = gsheet_handler.archive_data(row_data)
+                                        st.toast(f"✅ {msg}")
+                                        success_count += 1
+                                    except Exception as e:
+                                        st.error(f"Failed: {e}")
+
+                                if success_count > 0:
+                                    st.success(f"Archived {success_count} items.")
+                                    time.sleep(1.5)
+                                    # Force refresh
+                                    del st.session_state['monitor_df']
+                                    del st.session_state['monitor_dupes_snapshot']
+                                    st.rerun()
+                        else:
+                            st.warning("Please select items to archive.")
+
+                    st.divider()
+
+                    # SAVE CHANGES BUTTON
+                    if st.button("💾 Save Changes"):
+                        snapshot = st.session_state.monitor_dupes_snapshot
+                        if not snapshot.empty:
+                            with st.spinner("Saving changes..."):
+                                changes_count = 0
+                                # Iterate by index (assumes alignment)
+                                for i in range(len(edited_dupes)):
+                                    try:
+                                        new_row = edited_dupes.iloc[i]
+                                        old_row = snapshot.iloc[i]
+
+                                        # Compare relevant fields
+                                        # Convert both to dict for easier comparison
+                                        new_dict = new_row.to_dict()
+                                        old_dict = old_row.to_dict()
+
+                                        # Ignore 'Select'
+                                        if "Select" in new_dict: del new_dict["Select"]
+                                        if "Select" in old_dict: del old_dict["Select"]
+
+                                        # Check for equality
+                                        # Simple string comparison of values
+                                        is_diff = False
+                                        for k in ["Judul", "Isi", "URL", "Tanggal", "Entitas"]:
+                                            if str(new_dict.get(k, "")).strip() != str(old_dict.get(k, "")).strip():
+                                                is_diff = True
+                                                break
+
+                                        if is_diff:
+                                            # Update Row
+                                            gsheet_handler.update_row_in_sheet(
+                                                old_dict.get("Tanggal"),
+                                                old_dict.get("Entitas"),
+                                                old_dict.get("Judul"),
+                                                new_dict
+                                            )
+                                            changes_count += 1
+                                    except Exception as e:
+                                        st.error(f"Error updating row {i}: {e}")
+
+                                if changes_count > 0:
+                                    st.success(f"Updated {changes_count} rows.")
+                                    time.sleep(1.5)
+                                    # Force refresh
+                                    del st.session_state['monitor_df']
+                                    del st.session_state['monitor_dupes_snapshot']
+                                    st.rerun()
+                                else:
+                                    st.info("No changes detected.")
+
+            else:
+                st.success("✅ No duplicate/multiple entries found for this period.")
         else:
-            st.write("No data.")
+            st.write("No data loaded. Click Refresh.")
 
     # --- 5. TROUBLESHOOT ---
     elif sub_page == "Troubleshoot Connection":
