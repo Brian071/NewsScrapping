@@ -184,6 +184,7 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
         existing_urls = set()
         existing_signatures = set()
         existing_titles = set()
+        dates_with_articles = set()
 
         blocked_urls = set()
         blocked_titles = set()
@@ -214,6 +215,8 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
 
                 if t_sig and d_sig:
                     existing_signatures.add((d_sig, t_sig))
+                    # Mark date as having data if title is present
+                    dates_with_articles.add(d_sig)
         else:
             progress_callback(0, delta, "⚠️ Warning: Dataset empty or failed to load. Duplicates will NOT be filtered.")
 
@@ -230,6 +233,12 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
         for i in range(delta):
             date_obj = start_dt + timedelta(days=i)
             date_str = date_obj.strftime("%Y-%m-%d")
+
+            # SKIP CHECK: If date has existing articles, skip it.
+            if date_str in dates_with_articles:
+                progress_callback(processed, delta, f"Skipping {date_str} (Data already exists)...")
+                processed += 1
+                continue
 
             progress_callback(processed, delta, f"Searching {date_str}...")
 
