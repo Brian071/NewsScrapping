@@ -13,6 +13,9 @@ import translator_utils
 import scraper_lib
 import config # Load configuration
 
+# Define Minimum Date for Date Pickers
+MIN_DATE = datetime(2000, 1, 1).date()
+
 # Force default loop policy for Colab stability
 try:
     asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
@@ -158,7 +161,7 @@ if app_mode == "📝 Input & Scraping":
             if today.year == sel_year and today.month == sel_month:
                 default_date = today
 
-            selected_date = st.date_input("Pick a Date", value=default_date, key="input_manual_date")
+            selected_date = st.date_input("Pick a Date", value=default_date, key="input_manual_date", min_value=MIN_DATE)
             date_str = str(selected_date)
 
             # Check Status
@@ -324,8 +327,8 @@ if app_mode == "📝 Input & Scraping":
     elif sub_page == "Batch Scrape (Auto)":
         st.subheader("🚀 Batch Scrape (Direct)")
         c1, c2, c3 = st.columns(3)
-        start = c1.date_input("Start")
-        end = c2.date_input("End")
+        start = c1.date_input("Start", min_value=MIN_DATE)
+        end = c2.date_input("End", min_value=MIN_DATE)
         entity = c3.selectbox("Entity", ["AirAsia", "Garuda Indonesia"], key="batch_ent")
         
         c4, c5 = st.columns(2)
@@ -484,8 +487,8 @@ if app_mode == "📝 Input & Scraping":
         c1, c2 = st.columns(2)
         entity_gap = c1.selectbox("Entitas", ["AirAsia", "Garuda Indonesia"], key="gap_ent")
         kw_gap = c2.text_input("Keywords", key="gap_kw")
-        start_gap = c1.date_input("Range Start", key="gap_start")
-        end_gap = c2.date_input("Range End", key="gap_end")
+        start_gap = c1.date_input("Range Start", key="gap_start", min_value=MIN_DATE)
+        end_gap = c2.date_input("Range End", key="gap_end", min_value=MIN_DATE)
 
         status_gap = st.empty()
         prog_gap = st.empty()
@@ -611,8 +614,8 @@ if app_mode == "📝 Input & Scraping":
             st.session_state.monitor_df = pd.DataFrame()
 
         c1, c2, c3, c4 = st.columns(4)
-        m_start = c1.date_input("Start", value=datetime.now() - timedelta(days=30))
-        m_end = c2.date_input("End", value=datetime.now())
+        m_start = c1.date_input("Start", value=datetime.now() - timedelta(days=30), min_value=MIN_DATE)
+        m_end = c2.date_input("End", value=datetime.now(), min_value=MIN_DATE)
         m_entity = c3.selectbox("Entity", ["All", "AirAsia", "Garuda Indonesia"])
 
         # Explicit Refresh
