@@ -25,3 +25,4 @@ pydantic
 python-dateutil
 crawl4ai
 playwright
+langdetect

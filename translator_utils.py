@@ -4,6 +4,7 @@ from transformers import pipeline
 import torch
 from llama_index.core.node_parser import SentenceSplitter
 import gsheet_handler
+from langdetect import detect, LangDetectException
 
 # Global model cache
 _translator = None
@@ -17,8 +18,8 @@ def load_resources():
     if _translator is None:
         print("Loading NLLB-200 model...")
         device = 0 if torch.cuda.is_available() else -1
-        # Use lighter model for Colab stability: facebook/nllb-200-distilled-600M
-        _translator = pipeline("translation", model="facebook/nllb-200-distilled-600M", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
+        # Updated to 1.3B model as requested
+        _translator = pipeline("translation", model="facebook/nllb-200-1.3B", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
 
     if _splitter is None:
         print("Loading LlamaIndex SentenceSplitter...")
@@ -32,9 +33,18 @@ def load_resources():
 def smart_translate(text, translator, splitter):
     """
     Translates text using LlamaIndex SentenceSplitter and NLLB-200.
+    Skips translation if text is detected as English.
     """
     if not text or not isinstance(text, str) or text.strip() == "":
         return ""
+
+    # 0. Language Detection
+    try:
+        lang = detect(text)
+        if lang == 'en':
+            return text
+    except LangDetectException:
+        pass # Fallback to translate if detection fails
         
     # 1. Chunking via LlamaIndex
     chunks = splitter.split_text(text)
