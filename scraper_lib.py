@@ -99,8 +99,9 @@ def search_duckduckgo(query, max_results=5, region="wt-wt"):
     results = []
     max_retries = 3
 
-    # Try 'news' first with API backend, then fallback to 'text' (general search) with html backend
-    methods = [("news", None), ("text", "html")]
+    # Try 'news' first with API backend, then fallback to 'text' (general search) with default backend (api/auto)
+    # Note: backend='html' is deprecated/removed in newer ddgs versions
+    methods = [("news", None), ("text", "api")]
 
     for method, backend in methods:
         # If we already have results from a previous method, stop.
@@ -195,7 +196,8 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                 d_sig = d_sig_raw
                 try:
                     # Normalize date to YYYY-MM-DD
-                    d_parsed = date_parser.parse(d_sig_raw)
+                    # Use dayfirst=True because sheet data is likely DD/MM/YYYY (Indonesian context)
+                    d_parsed = date_parser.parse(d_sig_raw, dayfirst=True)
                     d_sig = d_parsed.strftime("%Y-%m-%d")
                 except:
                     pass
@@ -293,7 +295,7 @@ async def run_search_links(date, entity, keywords):
             include = True
             if d_raw:
                 try:
-                    d_parsed = date_parser.parse(str(d_raw)).date()
+                    d_parsed = date_parser.parse(str(d_raw), dayfirst=True).date()
                     if d_parsed != req_date_obj:
                          include = False
                 except:

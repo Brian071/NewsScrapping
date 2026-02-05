@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+.DS_Store
+temp_scrape_results.json
+*.swp

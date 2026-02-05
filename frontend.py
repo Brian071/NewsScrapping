@@ -83,7 +83,7 @@ app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "�
 if app_mode == "📝 Input & Scraping":
     st.title("📝 Input & Scraping Dashboard")
     
-    sub_page = st.sidebar.radio("Menu", ["Input Manual", "Batch Scrape (Auto)", "Gap Filler (Manual Scrape)", "Monitor Data"])
+    sub_page = st.sidebar.radio("Menu", ["Input Manual", "Batch Scrape (Auto)", "Gap Filler (Manual Scrape)", "Monitor Data", "Troubleshoot Connection"])
 
     # --- 1. INPUT MANUAL ---
     if sub_page == "Input Manual":
@@ -105,9 +105,10 @@ if app_mode == "📝 Input & Scraping":
 
             if not df_data.empty and 'Tanggal' in df_data.columns:
                 df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', dayfirst=True)
+                # Robust filtering: Strip whitespace from Entity
                 mask_data = (df_data['Tanggal'].dt.year == year) & \
                             (df_data['Tanggal'].dt.month == month) & \
-                            (df_data['Entitas'] == entity)
+                            (df_data['Entitas'].astype(str).str.strip() == entity)
                 filled_dates = set(df_data[mask_data]['Tanggal'].dt.day.astype(int).tolist())
             else:
                 filled_dates = set()
@@ -160,7 +161,8 @@ if app_mode == "📝 Input & Scraping":
             existing = pd.DataFrame()
             if not df.empty and 'Tanggal' in df.columns:
                  df['Tanggal_Str'] = df['Tanggal'].astype(str)
-                 existing = df[(df['Tanggal_Str'].str.contains(date_str)) & (df['Entitas'] == sel_entity)]
+                 # Robust check: Strip entity
+                 existing = df[(df['Tanggal_Str'].str.contains(date_str)) & (df['Entitas'].astype(str).str.strip() == sel_entity)]
                  is_filled = not existing.empty
 
             is_skipped = False
@@ -342,14 +344,24 @@ if app_mode == "📝 Input & Scraping":
                                     payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
 
                                     # Append and get sheet name
-                                    last_sheet_name = gsheet_handler.append_to_sheet(payload)
+                                    status_str = gsheet_handler.append_to_sheet(payload)
+
+                                    # Parse real sheet name from status string "SheetName (Row X)"
+                                    if " (" in status_str:
+                                        last_sheet_name = status_str.rsplit(" (", 1)[0]
+                                    else:
+                                        last_sheet_name = status_str
+
                                     last_saved_title = payload.get("Judul")
                                     count += 1
+
+                                    # Feedback per row
+                                    st.toast(f"Saved: {status_str}")
                                 except Exception as e:
                                     st.error(f"Error saving row {index}: {e}")
 
                         if count > 0:
-                            st.success(f"Successfully saved {count} rows to '{last_sheet_name}'!")
+                            st.success(f"Successfully saved {count} rows! Last location: '{last_sheet_name}'")
 
                             # Strict Verification
                             try:
@@ -364,7 +376,9 @@ if app_mode == "📝 Input & Scraping":
                                         st.success(f"✅ Verified: '{last_saved_title}' found in sheet.")
                                     else:
                                         st.error(f"❌ Verification FAILED: '{last_saved_title}' NOT found in last 10 rows of '{last_sheet_name}'.")
-                                        st.write("Recent rows:", recent_titles)
+                                        st.write(f"Sheet Headers Detected: {df_verify.columns.tolist()}")
+                                        st.write("Recent rows found:", recent_titles)
+                                        st.warning("Possible Cause: Sheet headers might have spaces/typos, or data was saved to a different sheet.")
                                 else:
                                     st.warning("Verification Warning: Sheet appears empty after save.")
                             except Exception as e:
@@ -435,14 +449,21 @@ if app_mode == "📝 Input & Scraping":
                                     # Strict String Conversion
                                     payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
 
-                                    last_sheet_name = gsheet_handler.append_to_sheet(payload)
+                                    status_str = gsheet_handler.append_to_sheet(payload)
+
+                                    # Parse real sheet name
+                                    if " (" in status_str:
+                                        last_sheet_name = status_str.rsplit(" (", 1)[0]
+                                    else:
+                                        last_sheet_name = status_str
+
                                     last_saved_title = payload.get("Judul")
                                     count += 1
                                 except Exception as e:
                                     st.error(f"Error saving row {index}: {e}")
 
                         if count > 0:
-                            st.success(f"Successfully saved {count} rows to '{last_sheet_name}'!")
+                            st.success(f"Successfully saved {count} rows! Last location: '{last_sheet_name}'")
 
                             # Strict Verification
                             try:
@@ -455,7 +476,8 @@ if app_mode == "📝 Input & Scraping":
                                         st.success(f"✅ Verified: '{last_saved_title}' found in sheet.")
                                     else:
                                         st.error(f"❌ Verification FAILED: '{last_saved_title}' NOT found in last 10 rows.")
-                                        st.write("Recent rows:", recent_titles)
+                                        st.write(f"Sheet Headers Detected: {df_verify.columns.tolist()}")
+                                        st.write("Recent rows found:", recent_titles)
                             except Exception as e:
                                 st.error(f"Verification Check Failed: {e}")
 
@@ -478,10 +500,23 @@ if app_mode == "📝 Input & Scraping":
         if not df.empty and "Tanggal" in df.columns:
             df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', dayfirst=True)
             mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
-            if m_entity != "All": mask = mask & (df["Entitas"] == m_entity)
+            if m_entity != "All": mask = mask & (df["Entitas"].astype(str).str.strip() == m_entity)
             st.dataframe(df[mask].sort_values(by="Tanggal", ascending=False))
         else:
             st.write("No data.")
+
+    # --- 5. TROUBLESHOOT ---
+    elif sub_page == "Troubleshoot Connection":
+        st.subheader("🔧 Connection Troubleshooter")
+        if st.button("Check Google Sheet Connection"):
+            with st.spinner("Checking..."):
+                info = gsheet_handler.check_connection()
+                if isinstance(info, dict):
+                    st.success(f"Connected to: **{info['title']}** (ID: `{info['id']}`)")
+                    st.write("Available Worksheets:")
+                    st.json(info['sheets'])
+                else:
+                    st.error(f"Connection Failed: {info}")
 
 # ==========================================
 # APP B: TRANSLATOR
