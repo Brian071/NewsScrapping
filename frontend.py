@@ -104,7 +104,9 @@ if app_mode == "📝 Input & Scraping":
             st.write(f"#### 📅 Status: {month_name} {year}")
 
             if not df_data.empty and 'Tanggal' in df_data.columns:
-                df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', dayfirst=True)
+                # FIX: Use format='mixed' to handle both YYYY-MM-DD and DD/MM/YYYY
+                df_data['Tanggal'] = pd.to_datetime(df_data['Tanggal'], errors='coerce', format='mixed', dayfirst=True)
+
                 # Robust filtering: Strip whitespace from Entity
                 mask_data = (df_data['Tanggal'].dt.year == year) & \
                             (df_data['Tanggal'].dt.month == month) & \
@@ -115,10 +117,13 @@ if app_mode == "📝 Input & Scraping":
 
             skipped_dates = set()
             if not df_logs.empty and 'Tanggal' in df_logs.columns:
-                 df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', dayfirst=True)
+                 # FIX: Use format='mixed'
+                 df_logs['Tanggal'] = pd.to_datetime(df_logs['Tanggal'], errors='coerce', format='mixed', dayfirst=True)
+
+                 # Check entity matching more robustly (strip whitespace)
                  mask_logs = (df_logs['Tanggal'].dt.year == year) & \
                              (df_logs['Tanggal'].dt.month == month) & \
-                             (df_logs['Entitas'] == entity)
+                             (df_logs['Entitas'].astype(str).str.strip() == entity)
                  skipped_dates = set(df_logs[mask_logs]['Tanggal'].dt.day.astype(int).tolist())
 
             cols = st.columns(7)
@@ -207,11 +212,38 @@ if app_mode == "📝 Input & Scraping":
 
                 if 'search_results' in st.session_state and st.session_state.search_results:
                      st.write(f"Found {len(st.session_state.search_results)} links:")
-                     for item in st.session_state.search_results:
-                         title = item.get('title', 'No Title')
-                         url = item.get('url')
-                         st.markdown(f"- [{title}]({url})")
-                         st.code(url)
+
+                     df_search = pd.DataFrame(st.session_state.search_results)
+                     if "Block" not in df_search.columns:
+                         df_search.insert(0, "Block", False)
+
+                     # Show editor
+                     edited_search = st.data_editor(
+                         df_search,
+                         column_config={
+                             "url": st.column_config.LinkColumn("URL"),
+                             "Block": st.column_config.CheckboxColumn("Block", default=False)
+                         },
+                         key="manual_search_editor",
+                         num_rows="dynamic"
+                     )
+
+                     if st.button("🚫 Block Selected", key="manual_block_btn"):
+                         to_block = edited_search[edited_search["Block"] == True]
+                         if not to_block.empty:
+                             with st.spinner("Blocking..."):
+                                 for _, row in to_block.iterrows():
+                                     gsheet_handler.log_blocked_content(row.get("url"), row.get("title"), "Manual Block (Search)")
+
+                                 # Update session state: keep only unblocked
+                                 remaining_df = edited_search[edited_search["Block"] == False]
+                                 if "Block" in remaining_df.columns:
+                                     remaining_df = remaining_df.drop(columns=["Block"])
+
+                                 st.session_state.search_results = remaining_df.to_dict('records')
+                                 st.success("Blocked!")
+                                 time.sleep(1)
+                                 st.rerun()
 
         with c2:
             st.write("### 📝 Editor / Scraper")
@@ -223,9 +255,11 @@ if app_mode == "📝 Input & Scraping":
                         with st.spinner("Scraping..."):
                             t, c, d = asyncio.run(scraper_lib.extract_article_content_async(url_to_scrape))
                             if t and t != "Error":
-                                st.session_state['temp_title'] = t
-                                st.session_state['temp_content'] = c
-                                st.session_state['temp_url'] = url_to_scrape
+                                # Update session state keys directly used by the inputs
+                                st.session_state['input_judul'] = t
+                                st.session_state['input_isi'] = c
+                                st.session_state['input_url'] = url_to_scrape
+
                                 if d:
                                      try:
                                          new_date = datetime.strptime(str(d), "%Y-%m-%d").date()
@@ -236,37 +270,49 @@ if app_mode == "📝 Input & Scraping":
                             else:
                                 st.error(f"Failed: {c}")
 
+            # Initialize input keys if not present
+            if 'input_judul' not in st.session_state: st.session_state['input_judul'] = ""
+            if 'input_isi' not in st.session_state: st.session_state['input_isi'] = ""
+            if 'input_url' not in st.session_state: st.session_state['input_url'] = ""
+
             with st.form("manual_form"):
-                default_title = st.session_state.get('temp_title', '')
-                default_content = st.session_state.get('temp_content', '')
-                default_url = st.session_state.get('temp_url', '')
-
-                # Consume temp state
-                if 'temp_title' in st.session_state: del st.session_state['temp_title']
-                if 'temp_content' in st.session_state: del st.session_state['temp_content']
-                if 'temp_url' in st.session_state: del st.session_state['temp_url']
-
-                t = st.text_input("Judul", value=default_title)
-                c = st.text_area("Isi", height=300, value=default_content)
-                u = st.text_input("URL (Optional)", value=default_url)
+                # Use key= to bind directly to session state
+                t = st.text_input("Judul", key="input_judul")
+                c = st.text_area("Isi", height=300, key="input_isi")
+                u = st.text_input("URL (Optional)", key="input_url")
 
                 if st.form_submit_button("💾 Simpan Data"):
-                    payload = {
-                        "Tanggal": str(selected_date),
-                        "Entitas": sel_entity,
-                        "Judul": t,
-                        "Isi": c,
-                        "URL": u,
-                        "Judul_Inggris": "",
-                        "Isi_Inggris": ""
-                    }
-                    try:
-                        gsheet_handler.append_to_sheet(payload)
-                        st.success("Tersimpan!")
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Save Error: {e}")
+                    # Read values directly from session state to ensure latest user edits are captured
+                    # (Variables t, c, u are also valid here, but explicit state read is safer with forms on some versions)
+                    final_t = st.session_state.get("input_judul", "")
+                    final_c = st.session_state.get("input_isi", "")
+                    final_u = st.session_state.get("input_url", "")
+
+                    if not final_t:
+                        st.error("Judul cannot be empty.")
+                    else:
+                        payload = {
+                            "Tanggal": str(selected_date),
+                            "Entitas": sel_entity,
+                            "Judul": final_t,
+                            "Isi": final_c,
+                            "URL": final_u,
+                            "Judul_Inggris": "",
+                            "Isi_Inggris": ""
+                        }
+                        try:
+                            gsheet_handler.append_to_sheet(payload)
+                            st.success("Tersimpan!")
+
+                            # Clear inputs after save
+                            st.session_state['input_judul'] = ""
+                            st.session_state['input_isi'] = ""
+                            st.session_state['input_url'] = ""
+
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Save Error: {e}")
 
             if is_filled:
                 st.write("---")
@@ -317,7 +363,11 @@ if app_mode == "📝 Input & Scraping":
             st.divider()
             st.write(f"### 📥 Review Results ({len(st.session_state.batch_results)})")
 
-            c_clear, c_save, _ = st.columns([1, 2, 4])
+            # Add Block Column if missing
+            if "Block" not in st.session_state.batch_results.columns:
+                st.session_state.batch_results.insert(0, "Block", False)
+
+            c_clear, c_block, c_save = st.columns([1, 1, 2])
 
             if c_clear.button("🗑️ Clear Results"):
                 st.session_state.batch_results = pd.DataFrame()
@@ -328,20 +378,58 @@ if app_mode == "📝 Input & Scraping":
             # Editor
             edited_df = st.data_editor(st.session_state.batch_results, num_rows="dynamic", key="batch_editor")
 
+            # Block Button
+            if c_block.button("🚫 Block Selected"):
+                to_block = edited_df[edited_df["Block"] == True]
+                if not to_block.empty:
+                    with st.spinner(f"Blocking {len(to_block)} items..."):
+                        for _, row in to_block.iterrows():
+                             gsheet_handler.log_blocked_content(row.get("URL", ""), row.get("Judul", ""), "Manual Block")
+
+                        # Remove blocked from session state and drop Block column for clean storage
+                        remaining = edited_df[edited_df["Block"] == False].copy()
+                        if "Block" in remaining.columns:
+                            remaining = remaining.drop(columns=["Block"])
+
+                        st.session_state.batch_results = remaining
+
+                        # Update temp file
+                        try:
+                            if os.path.exists(TEMP_RESULTS_FILE):
+                                os.remove(TEMP_RESULTS_FILE)
+                            if not remaining.empty:
+                                with open(TEMP_RESULTS_FILE, "w") as f:
+                                    for _, row in remaining.iterrows():
+                                        f.write(json.dumps(row.to_dict()) + "\n")
+                        except: pass
+
+                        st.success(f"Blocked {len(to_block)} items.")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.warning("No items selected to block.")
+
             # Save Button (Manual)
             if c_save.button("💾 Save Verified to Sheet"):
-                if not edited_df.empty:
+                # Filter out Block=True rows just in case
+                save_df = edited_df[edited_df["Block"] == False]
+
+                if not save_df.empty:
                     with st.spinner("Saving to Google Sheets..."):
                         count = 0
                         last_sheet_name = "Unknown"
                         last_saved_title = ""
 
-                        for index, row in edited_df.iterrows():
+                        for index, row in save_df.iterrows():
                             # Only save if title exists (basic validation)
                             if row.get("Judul"):
                                 try:
                                     # Strict String Conversion
-                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
+                                    # Remove 'Block' column if present in payload
+                                    row_dict = row.to_dict()
+                                    if "Block" in row_dict: del row_dict["Block"]
+
+                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row_dict.items()}
 
                                     # Append and get sheet name
                                     status_str = gsheet_handler.append_to_sheet(payload)
@@ -426,7 +514,11 @@ if app_mode == "📝 Input & Scraping":
             st.divider()
             st.write(f"### 📥 Review Results ({len(st.session_state.gap_results)})")
 
-            c_clear, c_save, _ = st.columns([1, 2, 4])
+            # Add Block Column
+            if "Block" not in st.session_state.gap_results.columns:
+                st.session_state.gap_results.insert(0, "Block", False)
+
+            c_clear, c_block, c_save = st.columns([1, 1, 2])
 
             if c_clear.button("🗑️ Clear Results", key="gap_clear"):
                 st.session_state.gap_results = pd.DataFrame()
@@ -435,19 +527,42 @@ if app_mode == "📝 Input & Scraping":
             # Editor
             edited_gap_df = st.data_editor(st.session_state.gap_results, num_rows="dynamic", key="gap_editor")
 
+            # Block Button
+            if c_block.button("🚫 Block Selected", key="gap_block"):
+                to_block = edited_gap_df[edited_gap_df["Block"] == True]
+                if not to_block.empty:
+                    with st.spinner(f"Blocking {len(to_block)} items..."):
+                        for _, row in to_block.iterrows():
+                             gsheet_handler.log_blocked_content(row.get("URL", ""), row.get("Judul", ""), "Manual Block")
+
+                        remaining = edited_gap_df[edited_gap_df["Block"] == False].copy()
+                        if "Block" in remaining.columns:
+                            remaining = remaining.drop(columns=["Block"])
+
+                        st.session_state.gap_results = remaining
+                        st.success(f"Blocked {len(to_block)} items.")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.warning("No items selected to block.")
+
             # Save Button (Manual)
             if c_save.button("💾 Save Verified to Sheet", key="gap_save"):
-                if not edited_gap_df.empty:
+                save_df = edited_gap_df[edited_gap_df["Block"] == False]
+                if not save_df.empty:
                     with st.spinner("Saving to Google Sheets..."):
                         count = 0
                         last_sheet_name = "Unknown"
                         last_saved_title = ""
 
-                        for index, row in edited_gap_df.iterrows():
+                        for index, row in save_df.iterrows():
                             if row.get("Judul"):
                                 try:
                                     # Strict String Conversion
-                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row.to_dict().items()}
+                                    row_dict = row.to_dict()
+                                    if "Block" in row_dict: del row_dict["Block"]
+
+                                    payload = {k: str(v).strip() if v is not None else "" for k, v in row_dict.items()}
 
                                     status_str = gsheet_handler.append_to_sheet(payload)
 
@@ -498,7 +613,8 @@ if app_mode == "📝 Input & Scraping":
 
         df = get_data()
         if not df.empty and "Tanggal" in df.columns:
-            df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', dayfirst=True)
+            # FIX: Use format='mixed'
+            df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors='coerce', format='mixed', dayfirst=True)
             mask = (df["Tanggal"] >= pd.to_datetime(m_start)) & (df["Tanggal"] <= pd.to_datetime(m_end))
             if m_entity != "All": mask = mask & (df["Entitas"].astype(str).str.strip() == m_entity)
             st.dataframe(df[mask].sort_values(by="Tanggal", ascending=False))
