@@ -22,3 +22,6 @@ google-auth-httplib2
 fastapi
 uvicorn
 pydantic
+python-dateutil
+crawl4ai
+playwright

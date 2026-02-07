@@ -7,6 +7,14 @@ from gspread.utils import rowcol_to_a1
 # Default Spreadsheet ID provided by user
 DEFAULT_SPREADSHEET_ID = "1U8xeumDGJckZsTqIMyNr0DBfg0Bv9_IRpDV6XdN59Hw"
 
+# Import Config to override if needed
+try:
+    import config
+    if hasattr(config, 'SPREADSHEET_ID'):
+        DEFAULT_SPREADSHEET_ID = config.SPREADSHEET_ID
+except ImportError:
+    pass
+
 def get_creds():
     try:
         creds, _ = default()
@@ -18,6 +26,7 @@ def get_creds():
 def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita"):
     """
     Safely retrieve or create a worksheet by name.
+    If worksheet_name is 'data_berita' but does not exist, it tries to use the first sheet (index 0).
     """
     creds = get_creds()
     if not creds:
@@ -31,6 +40,20 @@ def get_worksheet(sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="data_berita")
         try:
             return sh.worksheet(worksheet_name)
         except gspread.WorksheetNotFound:
+            # Fallback: If expecting main data but not found, try the first visible sheet
+            if worksheet_name == "data_berita":
+                print(f"Worksheet '{worksheet_name}' not found. Falling back to the first sheet (gid=0).")
+                try:
+                    ws = sh.get_worksheet(0)
+                    # Verify headers? Or just assume user knows what they are doing.
+                    # Let's ensure headers exist on the fallback sheet.
+                    headers = ws.row_values(1)
+                    if not headers:
+                         ws.append_row(["Tanggal", "Entitas", "Judul", "Isi", "Judul_Inggris", "Isi_Inggris", "URL"])
+                    return ws
+                except Exception as ex:
+                    print(f"Fallback to first sheet failed: {ex}")
+
             print(f"Worksheet '{worksheet_name}' not found. Creating it...")
             
             # Create new sheet
@@ -93,13 +116,17 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
         row_values.append(str(val))
         
     try:
-        ws.append_row(row_values)
-        return True
+        # Force USER_ENTERED to ensure strings are treated as such
+        print(f"DEBUG: Appending row to {ws.title}: {row_values[:2]}...")
+        ws.append_row(row_values, value_input_option='USER_ENTERED')
+        return ws.title
     except Exception as e:
+        print(f"ERROR: Append failed: {e}")
         if "Quota exceeded" in str(e):
+            print("Quota exceeded, retrying...")
             time.sleep(2)
-            ws.append_row(row_values)
-            return True
+            ws.append_row(row_values, value_input_option='USER_ENTERED')
+            return ws.title
         raise e
 
 def find_row_index_by_keys(ws, date, entity, title):

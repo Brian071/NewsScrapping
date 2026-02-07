@@ -19,14 +19,14 @@ def load_resources():
         device = 0 if torch.cuda.is_available() else -1
         # Use lighter model for Colab stability: facebook/nllb-200-distilled-600M
         _translator = pipeline("translation", model="facebook/nllb-200-distilled-600M", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
-    
+
     if _splitter is None:
         print("Loading LlamaIndex SentenceSplitter...")
         # Reduce chunk_size to 64 to ensure NLLB doesn't truncate output.
         # NLLB seems to struggle with long context > 200 tokens output generation.
         # 64 tokens is safer to ensure complete translation of every sentence.
         _splitter = SentenceSplitter(chunk_size=64, chunk_overlap=0)
-    
+
     return _translator, _splitter
 
 def smart_translate(text, translator, splitter):
@@ -49,8 +49,8 @@ def smart_translate(text, translator, splitter):
             translated_parts.append(res[0]['translation_text'])
         except Exception as e:
             print(f"Chunk translation error: {e}")
-            translated_parts.append(chunk) 
-            
+            translated_parts.append(chunk)
+
     return " ".join(translated_parts)
 
 def process_rows(selected_df, batch_size=1, progress=None):
@@ -66,9 +66,9 @@ def process_rows(selected_df, batch_size=1, progress=None):
     total = len(selected_df)
     processed_count = 0
     errors = 0
-    
+
     print(f"Processing {total} selected rows...")
-    
+
     # We will return the updated dataframe so the UI can reflect changes
     # Make a copy to avoid SettingWithCopy warnings
     result_df = selected_df.copy()
@@ -78,26 +78,26 @@ def process_rows(selected_df, batch_size=1, progress=None):
         r_date = row.get('Tanggal')
         r_entity = row.get('Entitas')
         r_judul = row.get('Judul')
-        
+
         # Current Values
         judul_ing = row.get('Judul_Inggris', '')
         isi_ing = row.get('Isi_Inggris', '')
         r_isi = row.get('Isi', '')
-        
+
         updated_fields = {}
-        
+
         # Translate Judul
         if not judul_ing or str(judul_ing).strip() == "":
              trans_judul = smart_translate(r_judul, translator, splitter)
              updated_fields['Judul_Inggris'] = trans_judul
              result_df.at[index, 'Judul_Inggris'] = trans_judul
-             
+
         # Translate Isi
         if not isi_ing or str(isi_ing).strip() == "":
              trans_isi = smart_translate(r_isi, translator, splitter)
              updated_fields['Isi_Inggris'] = trans_isi
              result_df.at[index, 'Isi_Inggris'] = trans_isi
-        
+
         # Update Sheet immediately if there are changes
         if updated_fields:
             try:
@@ -113,7 +113,7 @@ def process_rows(selected_df, batch_size=1, progress=None):
             except Exception as e:
                 print(f"Error updating row {r_judul}: {e}")
                 errors += 1
-        
+
         processed_count += 1
         if progress:
             progress(processed_count / total, desc=f"Processed {processed_count}/{total}")
@@ -126,19 +126,19 @@ def revert_rows(selected_df, progress=None):
     """
     if selected_df.empty:
         return pd.DataFrame(), "No rows selected."
-        
+
     print(f"Reverting {len(selected_df)} rows...")
-    
+
     result_df = selected_df.copy()
     errors = 0
-    
+
     for index, row in result_df.iterrows():
         r_date = row.get('Tanggal')
         r_entity = row.get('Entitas')
         r_judul = row.get('Judul')
-        
+
         fields = {'Judul_Inggris': '', 'Isi_Inggris': ''}
-        
+
         try:
              success = gsheet_handler.update_row_in_sheet(
                 date=r_date,
@@ -154,5 +154,5 @@ def revert_rows(selected_df, progress=None):
         except Exception as e:
             print(f"Failed to revert row {r_judul}: {e}")
             errors += 1
-            
+
     return result_df, f"Reverted {len(selected_df)} rows. Errors: {errors}"

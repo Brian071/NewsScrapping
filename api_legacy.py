@@ -145,7 +145,7 @@ async def extract_article_content_async(url):
             
             article = Article(url)
             article.set_html(result.html)
-            article.parse()
+            await asyncio.to_thread(article.parse)
             
             pub_date = article.publish_date
             pub_date_str = None
@@ -170,7 +170,13 @@ async def extract_article_content_async(url):
 
             text = article.text if article.text and len(article.text) > 100 else result.markdown
             
-            return article.title, text, pub_date_str
+            title = article.title # Store title before deletion
+
+            # Memory Cleanup
+            del article
+            gc.collect()
+
+            return title, text, pub_date_str
     except Exception as e:
         print(f"Scrape Error {url}: {e}")
         return "Error", str(e), None
@@ -219,7 +225,15 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
             for _, row in df_local.iterrows():
                 # Normalize title: strip + lower
                 t_sig = str(row.get('Judul', '')).strip().lower()
-                d_sig = str(row.get('Tanggal', '')).strip()
+                d_sig_raw = str(row.get('Tanggal', '')).strip()
+                d_sig = d_sig_raw
+                try:
+                    # Normalize date to YYYY-MM-DD
+                    d_parsed = date_parser.parse(d_sig_raw)
+                    d_sig = d_parsed.strftime("%Y-%m-%d")
+                except:
+                    pass
+
                 if t_sig and d_sig:
                     existing_signatures.add((d_sig, t_sig))
 
@@ -249,7 +263,7 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
                     t, c, pub_date = await extract_article_content_async(url)
                     if t and c and len(c) > 200:
                         # Check existing signatures
-                        final_date = pub_date if pub_date else date_str
+                        final_date = pub_date if pub_date else ""
                         t_norm = str(t).strip().lower()
                         d_norm = str(final_date).strip()
 
@@ -272,6 +286,10 @@ async def run_scrape_job(job_id: str, req: ScrapeRequest):
             processed_count += 1
             # SQLite: Update Processed Count
             db_handler.update_job_progress(job_id, processed=processed_count)
+
+            # Periodic GC
+            if processed_count % 5 == 0:
+                gc.collect()
 
         # --- SYNC TO DRIVE (via Google Sheets) ---
         db_handler.update_job_status(job_id, "running", "Syncing to Drive...")
