@@ -415,3 +415,32 @@ def log_blocked_content(url, title, reason="Spam", sheet_id=DEFAULT_SPREADSHEET_
 def get_blocked_content(sheet_id=DEFAULT_SPREADSHEET_ID):
     """Reads blocked content into a DataFrame"""
     return read_sheet_to_df(sheet_id, "blocked_content")
+
+# --- Archive Functions ---
+
+def archive_data(row_data, sheet_id=DEFAULT_SPREADSHEET_ID):
+    """
+    Moves a row from 'data_berita' to 'archive_berita'.
+    1. Appends to 'archive_berita'.
+    2. Deletes from 'data_berita'.
+    """
+    try:
+        # 1. Append to Archive
+        # We pass "archive_berita" as the target.
+        print(f"Archiving: {row_data.get('Judul', 'Unknown')}")
+        status = append_to_sheet(row_data, sheet_id, worksheet_name="archive_berita")
+
+        # 2. Delete from Main Sheet
+        # Identify by keys
+        date = row_data.get('Tanggal')
+        entity = row_data.get('Entitas')
+        title = row_data.get('Judul')
+
+        if date and entity and title:
+            delete_row_from_sheet(date, entity, title, sheet_id)
+            return f"Archived to {status} and deleted from source."
+        else:
+            return f"Copied to {status}, but skipped delete (missing keys)."
+
+    except Exception as e:
+        raise Exception(f"Archive failed: {e}")
