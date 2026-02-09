@@ -413,22 +413,12 @@ if app_mode == "📝 Input & Scraping":
                     os.remove(BATCH_TEMP_FILE)
                 st.rerun()
 
-            # Editor with Real-Time Sync
+            # Editor
             edited_df = st.data_editor(st.session_state.batch_results, num_rows="dynamic", key="batch_editor")
 
-            # Sync changes to temp file immediately
+            # Update session state from editor manually if needed, but avoid auto-sync loop
             if not edited_df.equals(st.session_state.batch_results):
                 st.session_state.batch_results = edited_df
-                # Rewrite temp file
-                try:
-                    if os.path.exists(BATCH_TEMP_FILE):
-                        os.remove(BATCH_TEMP_FILE)
-                    if not edited_df.empty:
-                        with open(BATCH_TEMP_FILE, "w") as f:
-                            for _, row in edited_df.iterrows():
-                                f.write(json.dumps(row.to_dict()) + "\n")
-                except Exception as e:
-                    print(f"Sync Error: {e}")
 
             # Block Button
             if c_block.button("🚫 Block Selected"):
@@ -581,19 +571,9 @@ if app_mode == "📝 Input & Scraping":
             # Editor
             edited_gap_df = st.data_editor(st.session_state.gap_results, num_rows="dynamic", key="gap_editor")
 
-            # Sync changes to temp file immediately
+            # Update session state from editor manually if needed
             if not edited_gap_df.equals(st.session_state.gap_results):
                 st.session_state.gap_results = edited_gap_df
-                # Rewrite temp file
-                try:
-                    if os.path.exists(GAP_TEMP_FILE):
-                        os.remove(GAP_TEMP_FILE)
-                    if not edited_gap_df.empty:
-                        with open(GAP_TEMP_FILE, "w") as f:
-                            for _, row in edited_gap_df.iterrows():
-                                f.write(json.dumps(row.to_dict()) + "\n")
-                except Exception as e:
-                    print(f"Gap Sync Error: {e}")
 
             # Block Button
             if c_block.button("🚫 Block Selected", key="gap_block"):
