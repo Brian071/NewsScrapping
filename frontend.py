@@ -102,18 +102,18 @@ def get_logs():
 
 app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
 
-        # --- Restore Session Sidebar ---
-        st.sidebar.markdown("---")
-        with st.sidebar.expander("📂 Recovery / Restore"):
-            sessions = list_recoverable_sessions()
-            if not sessions:
-                st.write("No recoverable sessions found.")
-            else:
-                st.write(f"Found {len(sessions)} saved sessions.")
-                selected_session = st.selectbox("Select Session File", sessions)
-                if st.button("Restore Selected"):
-                    if restore_session(selected_session):
-                        st.rerun()
+# --- Restore Session Sidebar ---
+st.sidebar.markdown("---")
+with st.sidebar.expander("📂 Recovery / Restore"):
+    sessions = list_recoverable_sessions()
+    if not sessions:
+        st.write("No recoverable sessions found.")
+    else:
+        st.write(f"Found {len(sessions)} saved sessions.")
+        selected_session = st.selectbox("Select Session File", sessions)
+        if st.button("Restore Selected"):
+            if restore_session(selected_session):
+                st.rerun()
 
 # ==========================================
 # APP A: INPUT & SCRAPING
