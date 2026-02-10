@@ -413,12 +413,24 @@ if app_mode == "📝 Input & Scraping":
                     os.remove(BATCH_TEMP_FILE)
                 st.rerun()
 
-            # Editor
-            edited_df = st.data_editor(st.session_state.batch_results, num_rows="dynamic", key="batch_editor")
+            # Editor (Buffered)
+            edited_df = st.data_editor(st.session_state.batch_results, num_rows="dynamic", key="batch_editor_buffer")
 
-            # Update session state from editor manually if needed, but avoid auto-sync loop
-            if not edited_df.equals(st.session_state.batch_results):
+            # Manual Sync Button
+            if st.button("💾 Apply & Save Edits", key="batch_save_edits"):
                 st.session_state.batch_results = edited_df
+                # Write to temp file
+                try:
+                    if os.path.exists(BATCH_TEMP_FILE):
+                        os.remove(BATCH_TEMP_FILE)
+                    if not edited_df.empty:
+                        with open(BATCH_TEMP_FILE, "w") as f:
+                            for _, row in edited_df.iterrows():
+                                f.write(json.dumps(row.to_dict()) + "\n")
+                    st.success("Edits saved to temp file.")
+                except Exception as e:
+                    st.error(f"Save Error: {e}")
+                st.rerun()
 
             # Block Button
             if c_block.button("🚫 Block Selected"):
@@ -568,12 +580,24 @@ if app_mode == "📝 Input & Scraping":
                     os.remove(GAP_TEMP_FILE)
                 st.rerun()
 
-            # Editor
-            edited_gap_df = st.data_editor(st.session_state.gap_results, num_rows="dynamic", key="gap_editor")
+            # Editor (Buffered)
+            edited_gap_df = st.data_editor(st.session_state.gap_results, num_rows="dynamic", key="gap_editor_buffer")
 
-            # Update session state from editor manually if needed
-            if not edited_gap_df.equals(st.session_state.gap_results):
+            # Manual Sync Button
+            if st.button("💾 Apply & Save Edits", key="gap_save_edits"):
                 st.session_state.gap_results = edited_gap_df
+                # Write to temp file
+                try:
+                    if os.path.exists(GAP_TEMP_FILE):
+                        os.remove(GAP_TEMP_FILE)
+                    if not edited_gap_df.empty:
+                        with open(GAP_TEMP_FILE, "w") as f:
+                            for _, row in edited_gap_df.iterrows():
+                                f.write(json.dumps(row.to_dict()) + "\n")
+                    st.success("Edits saved to temp file.")
+                except Exception as e:
+                    st.error(f"Save Error: {e}")
+                st.rerun()
 
             # Block Button
             if c_block.button("🚫 Block Selected", key="gap_block"):
