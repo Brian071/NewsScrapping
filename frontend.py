@@ -611,6 +611,9 @@ if app_mode == "📝 Input & Scraping":
                         if "Block" in remaining.columns:
                             remaining = remaining.drop(columns=["Block"])
 
+                        # Reset Index to prevent data editor state mismatches
+                        remaining.reset_index(drop=True, inplace=True)
+
                         st.session_state.gap_results = remaining
 
                         # Update temp file
@@ -679,9 +682,7 @@ if app_mode == "📝 Input & Scraping":
                             except Exception as e:
                                 st.error(f"Verification Check Failed: {e}")
 
-                        time.sleep(2)
-                        st.session_state.gap_results = pd.DataFrame()
-                        st.rerun()
+                        # Do not clear results or rerun - allows success message to persist
                 else:
                     st.warning("No data to save.")
 
