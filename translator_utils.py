@@ -69,9 +69,11 @@ def smart_translate(text, tokenizer, model, splitter):
 
             # Generate Translation (Target: eng_Latn)
             # forced_bos_token_id is crucial for NLLB target language
+            # Use convert_tokens_to_ids as lang_code_to_id might not be directly accessible
+            tgt_lang_id = tokenizer.convert_tokens_to_ids("eng_Latn")
             translated_tokens = model.generate(
                 **inputs,
-                forced_bos_token_id=tokenizer.lang_code_to_id["eng_Latn"],
+                forced_bos_token_id=tgt_lang_id,
                 max_length=512
             )
 
