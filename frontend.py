@@ -175,16 +175,43 @@ if app_mode == "📝 Input & Scraping":
                     if day == 0:
                         cols[i].write(" ")
                     else:
-                        status_icon = "⬜"
-                        if day in filled_dates: status_icon = "✅"
-                        elif day in skipped_dates: status_icon = "🟨"
-                        else: status_icon = "🟥"
-                        cols[i].write(f"{day} {status_icon}")
+                        if day in filled_dates:
+                             cols[i].write(f"{day} ✅")
+                        elif day in skipped_dates:
+                             cols[i].write(f"{day} 🟨")
+                        else:
+                             # Multi-select checkbox for empty days
+                             cols[i].checkbox(f"{day} 🟥", key=f"chk_pass_{year}_{month}_{day}")
 
         try:
             render_calendar(sel_year, sel_month, df, logs, sel_entity)
         except Exception as e:
             st.error(f"Calendar Error: {e}")
+
+        # Batch Pass Action
+        if st.button("🚫 Mark Selected Days as Pass"):
+             days_to_pass = []
+             for k, v in st.session_state.items():
+                 if k.startswith(f"chk_pass_{sel_year}_{sel_month}_") and v is True:
+                     # Key format: chk_pass_YEAR_MONTH_DAY
+                     day_str = k.split("_")[-1]
+                     # Construct Date
+                     try:
+                         d_obj = datetime(sel_year, sel_month, int(day_str))
+                         d_str = d_obj.strftime("%Y-%m-%d")
+                         days_to_pass.append(d_str)
+                     except: pass
+
+             if days_to_pass:
+                 with st.spinner(f"Marking {len(days_to_pass)} days as Pass..."):
+                     for d_str in days_to_pass:
+                         gsheet_handler.log_empty_date(d_str, sel_entity, "Manual Batch Pass")
+                     st.success(f"Successfully marked {len(days_to_pass)} days as Pass!")
+                     time.sleep(1)
+                     st.rerun()
+             else:
+                 st.warning("No days selected.")
+
         st.divider()
 
         # Date Selection
@@ -294,9 +321,9 @@ if app_mode == "📝 Input & Scraping":
                             t, c, d = asyncio.run(scraper_lib.extract_article_content_async(url_to_scrape))
                             if t and t != "Error":
                                 # Update session state keys directly used by the inputs
-                                st.session_state['input_judul'] = t
-                                st.session_state['input_isi'] = c
-                                st.session_state['input_url'] = url_to_scrape
+                                st.session_state['input_judul'] = t or ""
+                                st.session_state['input_isi'] = c or ""
+                                st.session_state['input_url'] = url_to_scrape or ""
 
                                 if d:
                                      try:
