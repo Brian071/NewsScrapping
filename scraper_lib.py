@@ -166,7 +166,7 @@ def search_duckduckgo(query, max_results=5, region="wt-wt"):
 
 # --- Main Logic with Callbacks ---
 
-async def run_batch_scrape(start_date, end_date, entity, keywords, progress_callback, region="wt-wt"):
+async def run_batch_scrape(start_date, end_date, entity, keywords, progress_callback, region="wt-wt", temp_file="temp_scrape_results.json"):
     results_list = []
     try:
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -294,10 +294,10 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                     results_list.append(item)
 
                     try:
-                        with open(TEMP_RESULTS_FILE, "a") as f:
+                        with open(temp_file, "a") as f:
                             f.write(json.dumps(item) + "\n")
                     except Exception as e:
-                        print(f"Failed to save temp result: {e}")
+                        print(f"Failed to save temp result to {temp_file}: {e}")
 
             processed += 1
             progress_callback(processed, delta, f"Completed {date_str}")

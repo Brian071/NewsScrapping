@@ -13,6 +13,9 @@ import translator_utils
 import scraper_lib
 import config # Load configuration
 
+# Define Minimum Date for Date Pickers
+MIN_DATE = datetime(2000, 1, 1).date()
+
 # Force default loop policy for Colab stability
 try:
     asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
@@ -37,25 +40,47 @@ if 'batch_results' not in st.session_state:
 if 'gap_results' not in st.session_state:
     st.session_state.gap_results = pd.DataFrame()
 
+# Generate unique session ID for temp files
+if 'session_id' not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())[:8]
+
+# Define unique temp files for this session
+BATCH_TEMP_FILE = f"temp_batch_{st.session_state.session_id}.json"
+GAP_TEMP_FILE = f"temp_gap_{st.session_state.session_id}.json"
+
 # Import JSON/OS here if not already imported (but python handles duplicate imports)
 import json
 import os
+import glob
 
-# Check for temp results on load
-TEMP_RESULTS_FILE = "temp_scrape_results.json"
+# Restore Functionality
+def list_recoverable_sessions():
+    """Finds existing temp files from previous sessions."""
+    batch_files = glob.glob("temp_batch_*.json")
+    gap_files = glob.glob("temp_gap_*.json")
+    return sorted(batch_files + gap_files, key=os.path.getmtime, reverse=True)
 
-if os.path.exists(TEMP_RESULTS_FILE) and st.session_state.batch_results.empty:
+def restore_session(filename):
+    """Restores data from a specific temp file."""
     try:
         data = []
-        with open(TEMP_RESULTS_FILE, "r") as f:
+        with open(filename, "r") as f:
             for line in f:
                 if line.strip():
                     data.append(json.loads(line))
+
         if data:
-            st.session_state.batch_results = pd.DataFrame(data)
-            st.toast(f"Restored {len(data)} items from previous session.")
+            df = pd.DataFrame(data)
+            if "batch" in filename:
+                st.session_state.batch_results = df
+                st.toast(f"Restored Batch Data ({len(data)} items) from {filename}")
+            elif "gap" in filename:
+                st.session_state.gap_results = df
+                st.toast(f"Restored Gap Data ({len(data)} items) from {filename}")
+            return True
     except Exception as e:
-        print(f"Failed to load temp results: {e}")
+        st.error(f"Failed to restore {filename}: {e}")
+    return False
 
 # --- Helper Functions ---
 def get_data():
@@ -76,6 +101,19 @@ def get_logs():
     return pd.DataFrame()
 
 app_mode = st.sidebar.selectbox("Pilih Aplikasi", ["📝 Input & Scraping", "🔄 Translator"])
+
+# --- Restore Session Sidebar ---
+st.sidebar.markdown("---")
+with st.sidebar.expander("📂 Recovery / Restore"):
+    sessions = list_recoverable_sessions()
+    if not sessions:
+        st.write("No recoverable sessions found.")
+    else:
+        st.write(f"Found {len(sessions)} saved sessions.")
+        selected_session = st.selectbox("Select Session File", sessions)
+        if st.button("Restore Selected"):
+            if restore_session(selected_session):
+                st.rerun()
 
 # ==========================================
 # APP A: INPUT & SCRAPING
@@ -158,7 +196,7 @@ if app_mode == "📝 Input & Scraping":
             if today.year == sel_year and today.month == sel_month:
                 default_date = today
 
-            selected_date = st.date_input("Pick a Date", value=default_date, key="input_manual_date")
+            selected_date = st.date_input("Pick a Date", value=default_date, key="input_manual_date", min_value=MIN_DATE)
             date_str = str(selected_date)
 
             # Check Status
@@ -324,8 +362,8 @@ if app_mode == "📝 Input & Scraping":
     elif sub_page == "Batch Scrape (Auto)":
         st.subheader("🚀 Batch Scrape (Direct)")
         c1, c2, c3 = st.columns(3)
-        start = c1.date_input("Start")
-        end = c2.date_input("End")
+        start = c1.date_input("Start", min_value=MIN_DATE)
+        end = c2.date_input("End", min_value=MIN_DATE)
         entity = c3.selectbox("Entity", ["AirAsia", "Garuda Indonesia"], key="batch_ent")
         
         c4, c5 = st.columns(2)
@@ -350,7 +388,7 @@ if app_mode == "📝 Input & Scraping":
                 # Extract region code
                 reg_code = region.split(" ")[0]
                 results = asyncio.run(scraper_lib.run_batch_scrape(
-                    str(start), str(end), entity, kw, update_progress, region=reg_code
+                    str(start), str(end), entity, kw, update_progress, region=reg_code, temp_file=BATCH_TEMP_FILE
                 ))
 
                 if results:
@@ -371,12 +409,28 @@ if app_mode == "📝 Input & Scraping":
 
             if c_clear.button("🗑️ Clear Results"):
                 st.session_state.batch_results = pd.DataFrame()
-                if os.path.exists(TEMP_RESULTS_FILE):
-                    os.remove(TEMP_RESULTS_FILE)
+                if os.path.exists(BATCH_TEMP_FILE):
+                    os.remove(BATCH_TEMP_FILE)
                 st.rerun()
 
-            # Editor
-            edited_df = st.data_editor(st.session_state.batch_results, num_rows="dynamic", key="batch_editor")
+            # Editor (Buffered)
+            edited_df = st.data_editor(st.session_state.batch_results, num_rows="dynamic", key="batch_editor_buffer")
+
+            # Manual Sync Button
+            if st.button("💾 Apply & Save Edits", key="batch_save_edits"):
+                st.session_state.batch_results = edited_df
+                # Write to temp file
+                try:
+                    if os.path.exists(BATCH_TEMP_FILE):
+                        os.remove(BATCH_TEMP_FILE)
+                    if not edited_df.empty:
+                        with open(BATCH_TEMP_FILE, "w") as f:
+                            for _, row in edited_df.iterrows():
+                                f.write(json.dumps(row.to_dict()) + "\n")
+                    st.success("Edits saved to temp file.")
+                except Exception as e:
+                    st.error(f"Save Error: {e}")
+                st.rerun()
 
             # Block Button
             if c_block.button("🚫 Block Selected"):
@@ -395,10 +449,10 @@ if app_mode == "📝 Input & Scraping":
 
                         # Update temp file
                         try:
-                            if os.path.exists(TEMP_RESULTS_FILE):
-                                os.remove(TEMP_RESULTS_FILE)
+                            if os.path.exists(BATCH_TEMP_FILE):
+                                os.remove(BATCH_TEMP_FILE)
                             if not remaining.empty:
-                                with open(TEMP_RESULTS_FILE, "w") as f:
+                                with open(BATCH_TEMP_FILE, "w") as f:
                                     for _, row in remaining.iterrows():
                                         f.write(json.dumps(row.to_dict()) + "\n")
                         except: pass
@@ -484,8 +538,8 @@ if app_mode == "📝 Input & Scraping":
         c1, c2 = st.columns(2)
         entity_gap = c1.selectbox("Entitas", ["AirAsia", "Garuda Indonesia"], key="gap_ent")
         kw_gap = c2.text_input("Keywords", key="gap_kw")
-        start_gap = c1.date_input("Range Start", key="gap_start")
-        end_gap = c2.date_input("Range End", key="gap_end")
+        start_gap = c1.date_input("Range Start", key="gap_start", min_value=MIN_DATE)
+        end_gap = c2.date_input("Range End", key="gap_end", min_value=MIN_DATE)
 
         status_gap = st.empty()
         prog_gap = st.empty()
@@ -501,7 +555,7 @@ if app_mode == "📝 Input & Scraping":
                         prog_gap.progress(min(1.0, current/total))
 
                 results = asyncio.run(scraper_lib.run_batch_scrape(
-                    str(start_gap), str(end_gap), entity_gap, kw_gap, update_progress_gap
+                    str(start_gap), str(end_gap), entity_gap, kw_gap, update_progress_gap, temp_file=GAP_TEMP_FILE
                 ))
 
                 if results:
@@ -522,10 +576,28 @@ if app_mode == "📝 Input & Scraping":
 
             if c_clear.button("🗑️ Clear Results", key="gap_clear"):
                 st.session_state.gap_results = pd.DataFrame()
+                if os.path.exists(GAP_TEMP_FILE):
+                    os.remove(GAP_TEMP_FILE)
                 st.rerun()
 
-            # Editor
-            edited_gap_df = st.data_editor(st.session_state.gap_results, num_rows="dynamic", key="gap_editor")
+            # Editor (Buffered)
+            edited_gap_df = st.data_editor(st.session_state.gap_results, num_rows="dynamic", key="gap_editor_buffer")
+
+            # Manual Sync Button
+            if st.button("💾 Apply & Save Edits", key="gap_save_edits"):
+                st.session_state.gap_results = edited_gap_df
+                # Write to temp file
+                try:
+                    if os.path.exists(GAP_TEMP_FILE):
+                        os.remove(GAP_TEMP_FILE)
+                    if not edited_gap_df.empty:
+                        with open(GAP_TEMP_FILE, "w") as f:
+                            for _, row in edited_gap_df.iterrows():
+                                f.write(json.dumps(row.to_dict()) + "\n")
+                    st.success("Edits saved to temp file.")
+                except Exception as e:
+                    st.error(f"Save Error: {e}")
+                st.rerun()
 
             # Block Button
             if c_block.button("🚫 Block Selected", key="gap_block"):
@@ -540,6 +612,17 @@ if app_mode == "📝 Input & Scraping":
                             remaining = remaining.drop(columns=["Block"])
 
                         st.session_state.gap_results = remaining
+
+                        # Update temp file
+                        try:
+                            if os.path.exists(GAP_TEMP_FILE):
+                                os.remove(GAP_TEMP_FILE)
+                            if not remaining.empty:
+                                with open(GAP_TEMP_FILE, "w") as f:
+                                    for _, row in remaining.iterrows():
+                                        f.write(json.dumps(row.to_dict()) + "\n")
+                        except: pass
+
                         st.success(f"Blocked {len(to_block)} items.")
                         time.sleep(1)
                         st.rerun()
@@ -611,8 +694,8 @@ if app_mode == "📝 Input & Scraping":
             st.session_state.monitor_df = pd.DataFrame()
 
         c1, c2, c3, c4 = st.columns(4)
-        m_start = c1.date_input("Start", value=datetime.now() - timedelta(days=30))
-        m_end = c2.date_input("End", value=datetime.now())
+        m_start = c1.date_input("Start", value=datetime.now() - timedelta(days=30), min_value=MIN_DATE)
+        m_end = c2.date_input("End", value=datetime.now(), min_value=MIN_DATE)
         m_entity = c3.selectbox("Entity", ["All", "AirAsia", "Garuda Indonesia"])
 
         # Explicit Refresh
