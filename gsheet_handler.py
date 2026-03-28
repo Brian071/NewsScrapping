@@ -5,6 +5,7 @@ import time
 import random
 from gspread.utils import rowcol_to_a1
 import re
+from dateutil import parser as date_parser
 
 # Default Spreadsheet ID provided by user
 DEFAULT_SPREADSHEET_ID = "1U8xeumDGJckZsTqIMyNr0DBfg0Bv9_IRpDV6XdN59Hw"
@@ -292,16 +293,40 @@ def append_to_sheet(row_data, sheet_id=DEFAULT_SPREADSHEET_ID, worksheet_name="d
 def find_row_index_by_keys(ws, date, entity, title):
     records = ws.get_all_records()
     search_title = str(title).strip().lower()
-    search_date = str(date).strip()
     search_entity = str(entity).strip()
     
+    # Try to parse search date for robust comparison
+    search_dt = None
+    try:
+        if date:
+            search_dt = date_parser.parse(str(date), dayfirst=True)
+    except:
+        pass
+
     for i, r in enumerate(records):
-        r_date = str(r.get('Tanggal', '')).strip()
         r_entity = str(r.get('Entitas', '')).strip()
         r_title = str(r.get('Judul', '')).strip().lower()
         
-        if r_date == search_date and r_entity == search_entity and r_title == search_title:
-            return i + 2 
+        # Check Title and Entity first (fast filtering)
+        if r_entity != search_entity or r_title != search_title:
+            continue
+
+        # Check Date (Robust)
+        r_date_str = str(r.get('Tanggal', '')).strip()
+
+        # 1. Exact String Match
+        if r_date_str == str(date).strip():
+            return i + 2
+
+        # 2. Parsed Match (Flexible)
+        if search_dt:
+            try:
+                if r_date_str:
+                    r_dt = date_parser.parse(r_date_str, dayfirst=True)
+                    if r_dt.date() == search_dt.date():
+                        return i + 2
+            except:
+                pass
             
     return None
 

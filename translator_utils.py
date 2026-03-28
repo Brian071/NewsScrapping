@@ -1,38 +1,43 @@
 import os
 import pandas as pd
-from transformers import pipeline
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import torch
 from llama_index.core.node_parser import SentenceSplitter
 import gsheet_handler
 from langdetect import detect, LangDetectException
 
 # Global model cache
-_translator = None
+_tokenizer = None
+_model = None
 _splitter = None
 
 def load_resources():
     """
-    Loads the NLLB-200 translation pipeline and LlamaIndex splitter.
+    Loads the NLLB-200 tokenizer and model directly.
     """
-    global _translator, _splitter
-    if _translator is None:
-        print("Loading NLLB-200 model...")
-        device = 0 if torch.cuda.is_available() else -1
-        # Updated to 1.3B model as requested
-        _translator = pipeline("translation", model="facebook/nllb-200-1.3B", src_lang="ind_Latn", tgt_lang="eng_Latn", device=device)
+    global _tokenizer, _model, _splitter
+
+    model_name = "facebook/nllb-200-1.3B"
+
+    if _tokenizer is None:
+        print(f"Loading Tokenizer for {model_name}...")
+        _tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    if _model is None:
+        print(f"Loading Model for {model_name}...")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
 
     if _splitter is None:
         print("Loading LlamaIndex SentenceSplitter...")
         # Reduce chunk_size to 64 to ensure NLLB doesn't truncate output.
-        # NLLB seems to struggle with long context > 200 tokens output generation.
-        # 64 tokens is safer to ensure complete translation of every sentence.
         _splitter = SentenceSplitter(chunk_size=64, chunk_overlap=0)
 
-    return _translator, _splitter
+    return _tokenizer, _model, _splitter
 
-def smart_translate(text, translator, splitter):
+def smart_translate(text, tokenizer, model, splitter):
     """
-    Translates text using LlamaIndex SentenceSplitter and NLLB-200.
+    Translates text using LlamaIndex SentenceSplitter and NLLB-200 model directly.
     Skips translation if text is detected as English.
     """
     if not text or not isinstance(text, str) or text.strip() == "":
@@ -51,12 +56,31 @@ def smart_translate(text, translator, splitter):
     
     # 2. Translation
     translated_parts = []
+    device = model.device
+
+    # Set source language to Indonesian (ind_Latn)
+    tokenizer.src_lang = "ind_Latn"
+
     for chunk in chunks:
         if not chunk.strip(): continue
         try:
-            # max_length=512 is plenty for a 128 token input
-            res = translator(chunk, max_length=512, truncation=True)
-            translated_parts.append(res[0]['translation_text'])
+            # Tokenize
+            inputs = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=128).to(device)
+
+            # Generate Translation (Target: eng_Latn)
+            # forced_bos_token_id is crucial for NLLB target language
+            # Use convert_tokens_to_ids as lang_code_to_id might not be directly accessible
+            tgt_lang_id = tokenizer.convert_tokens_to_ids("eng_Latn")
+            translated_tokens = model.generate(
+                **inputs,
+                forced_bos_token_id=tgt_lang_id,
+                max_length=512
+            )
+
+            # Decode
+            trans_text = tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
+            translated_parts.append(trans_text)
+
         except Exception as e:
             print(f"Chunk translation error: {e}")
             translated_parts.append(chunk)
@@ -71,7 +95,7 @@ def process_rows(selected_df, batch_size=1, progress=None):
     if selected_df.empty:
         return pd.DataFrame(), "No rows selected."
 
-    translator, splitter = load_resources()
+    tokenizer, model, splitter = load_resources()
     
     total = len(selected_df)
     processed_count = 0
@@ -98,13 +122,13 @@ def process_rows(selected_df, batch_size=1, progress=None):
 
         # Translate Judul
         if not judul_ing or str(judul_ing).strip() == "":
-             trans_judul = smart_translate(r_judul, translator, splitter)
+             trans_judul = smart_translate(r_judul, tokenizer, model, splitter)
              updated_fields['Judul_Inggris'] = trans_judul
              result_df.at[index, 'Judul_Inggris'] = trans_judul
 
         # Translate Isi
         if not isi_ing or str(isi_ing).strip() == "":
-             trans_isi = smart_translate(r_isi, translator, splitter)
+             trans_isi = smart_translate(r_isi, tokenizer, model, splitter)
              updated_fields['Isi_Inggris'] = trans_isi
              result_df.at[index, 'Isi_Inggris'] = trans_isi
 
