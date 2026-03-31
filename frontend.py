@@ -586,14 +586,13 @@ if app_mode == "📝 Input & Scraping":
             # Manual Sync Button
             if st.button("💾 Apply & Save Edits", key="gap_save_edits"):
                 st.session_state.gap_results = edited_gap_df
-                # Write to temp file
+                # Write to temp file atomically
                 try:
-                    if os.path.exists(GAP_TEMP_FILE):
-                        os.remove(GAP_TEMP_FILE)
-                    if not edited_gap_df.empty:
-                        with open(GAP_TEMP_FILE, "w") as f:
-                            for _, row in edited_gap_df.iterrows():
-                                f.write(json.dumps(row.to_dict()) + "\n")
+                    temp_filename = GAP_TEMP_FILE + ".tmp"
+                    with open(temp_filename, "w") as f:
+                        for _, row in edited_gap_df.iterrows():
+                            f.write(json.dumps(row.to_dict()) + "\n")
+                    os.replace(temp_filename, GAP_TEMP_FILE)
                     st.success("Edits saved to temp file.")
                 except Exception as e:
                     st.error(f"Save Error: {e}")
@@ -611,17 +610,20 @@ if app_mode == "📝 Input & Scraping":
                         if "Block" in remaining.columns:
                             remaining = remaining.drop(columns=["Block"])
 
+                        # Reset Index to prevent data editor state mismatches
+                        remaining.reset_index(drop=True, inplace=True)
+
                         st.session_state.gap_results = remaining
 
-                        # Update temp file
+                        # Update temp file atomically
                         try:
-                            if os.path.exists(GAP_TEMP_FILE):
-                                os.remove(GAP_TEMP_FILE)
-                            if not remaining.empty:
-                                with open(GAP_TEMP_FILE, "w") as f:
-                                    for _, row in remaining.iterrows():
-                                        f.write(json.dumps(row.to_dict()) + "\n")
-                        except: pass
+                            temp_filename = GAP_TEMP_FILE + ".tmp"
+                            with open(temp_filename, "w") as f:
+                                for _, row in remaining.iterrows():
+                                    f.write(json.dumps(row.to_dict()) + "\n")
+                            os.replace(temp_filename, GAP_TEMP_FILE)
+                        except Exception as e:
+                            st.warning(f"Could not update temp file: {e}")
 
                         st.success(f"Blocked {len(to_block)} items.")
                         time.sleep(1)
@@ -679,9 +681,7 @@ if app_mode == "📝 Input & Scraping":
                             except Exception as e:
                                 st.error(f"Verification Check Failed: {e}")
 
-                        time.sleep(2)
-                        st.session_state.gap_results = pd.DataFrame()
-                        st.rerun()
+                        # Do not clear results or rerun - allows success message to persist
                 else:
                     st.warning("No data to save.")
 

@@ -57,6 +57,32 @@ def parse_date_smart(date_str):
     except:
         return None
 
+def normalize_url(url):
+    """
+    Normalize URL to improve deduplication matching.
+    Removes protocol, www, query parameters, and trailing slashes.
+    """
+    if not url: return ""
+    url = str(url).strip().lower()
+
+    # Remove protocol
+    if "://" in url:
+        url = url.split("://", 1)[1]
+
+    # Remove www
+    if url.startswith("www."):
+        url = url[4:]
+
+    # Remove query parameters
+    if "?" in url:
+        url = url.split("?", 1)[0]
+
+    # Remove trailing slash
+    if url.endswith("/"):
+        url = url[:-1]
+
+    return url
+
 # --- Core Scraper Functions ---
 
 def find_date_in_text(text):
@@ -194,7 +220,12 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
             progress_callback(0, delta, f"Loaded {count_loaded} records for deduplication.")
 
             if "URL" in df_local.columns:
-                 existing_urls = set(df_local["URL"].dropna().astype(str).str.strip().values)
+                 # Normalize existing URLs
+                 raw_urls = df_local["URL"].dropna().astype(str).values
+                 existing_urls = set(normalize_url(u) for u in raw_urls if u.strip())
+
+            # Debug log to verify loading
+            print(f"DEBUG: Loaded {len(existing_urls)} unique normalized URLs for deduplication.")
 
             for _, row in df_local.iterrows():
                 t_raw = str(row.get('Judul', ''))
@@ -222,7 +253,8 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
 
         if not df_blocked.empty:
             if "URL" in df_blocked.columns:
-                blocked_urls = set(df_blocked["URL"].dropna().astype(str).str.strip().values)
+                raw_blocked = df_blocked["URL"].dropna().astype(str).values
+                blocked_urls = set(normalize_url(u) for u in raw_blocked if u.strip())
             if "Title" in df_blocked.columns:
                 blocked_titles = set(df_blocked["Title"].dropna().astype(str).str.strip().str.lower().values)
             progress_callback(0, delta, f"Loaded {len(df_blocked)} blocked items.")
@@ -250,19 +282,27 @@ async def run_batch_scrape(start_date, end_date, entity, keywords, progress_call
                 url = res.get('url')
                 if not url: continue
 
-                # 1. URL Check
-                url_clean = url.strip()
-                if url_clean in existing_urls: continue
-                if url_clean in blocked_urls: continue
-                if url in job_seen_urls: continue
+                # 1. URL Check (Normalized)
+                url_norm = normalize_url(url)
+
+                if url_norm in existing_urls:
+                    print(f"DEBUG: Skipping duplicate URL: {url}")
+                    continue
+                if url_norm in blocked_urls:
+                    continue
+                if url_norm in job_seen_urls:
+                    continue
 
                 # 2. Pre-Scrape Title Check
                 search_title = res.get('title', '').strip().lower()
                 if search_title:
-                    if search_title in existing_titles: continue
-                    if search_title in blocked_titles: continue
+                    if search_title in existing_titles:
+                        print(f"DEBUG: Skipping duplicate Title: {search_title}")
+                        continue
+                    if search_title in blocked_titles:
+                        continue
 
-                job_seen_urls.add(url)
+                job_seen_urls.add(url_norm)
 
                 progress_callback(processed, delta, f"Scraping {url[:30]}...")
                 t, c, pub_date = await extract_article_content_async(url)
@@ -319,14 +359,16 @@ async def run_search_links(date, entity, keywords):
         blocked_titles = set()
         if not df_blocked.empty:
             if "URL" in df_blocked.columns:
-                blocked_urls = set(df_blocked["URL"].dropna().astype(str).str.strip().values)
+                raw_blocked = df_blocked["URL"].dropna().astype(str).values
+                blocked_urls = set(normalize_url(u) for u in raw_blocked if u.strip())
             if "Title" in df_blocked.columns:
                 blocked_titles = set(df_blocked["Title"].dropna().astype(str).str.strip().str.lower().values)
 
         df_local = gsheet_handler.read_sheet_to_df(worksheet_name="data_berita")
         existing_urls = set()
         if not df_local.empty and "URL" in df_local.columns:
-            existing_urls = set(df_local["URL"].dropna().astype(str).str.strip().values)
+            raw_urls = df_local["URL"].dropna().astype(str).values
+            existing_urls = set(normalize_url(u) for u in raw_urls if u.strip())
 
     except Exception as e:
         print(f"Error loading block/existing lists in search_links: {e}")
@@ -339,9 +381,10 @@ async def run_search_links(date, entity, keywords):
         req_date_obj = datetime.strptime(date, "%Y-%m-%d").date()
         for r in results:
             url = r.get("url", "").strip()
+            url_norm = normalize_url(url)
             title = r.get("title", "").strip().lower()
 
-            if url in blocked_urls or url in existing_urls: continue
+            if url_norm in blocked_urls or url_norm in existing_urls: continue
             if title in blocked_titles: continue
 
             d_raw = r.get("date", "")
